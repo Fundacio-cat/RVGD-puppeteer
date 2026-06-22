@@ -1,0 +1,20 @@
+{
+  "database": {
+    "url": "postgres://USUARI:CONTRASENYA@HOST:PORT/BASE_DE_DADES"
+  },
+  "search": {
+    "maxResults": 11,
+    "timeoutMs": 60000
+  },
+  "browser": {
+    "executablePath": "/usr/bin/chromium-browser",
+    "headless": true,
+    "slowMo": 80,
+    "args": [
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--use-gl=swiftshader"
+    ]
+  }
+}
+

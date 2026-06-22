@@ -1,0 +1,11 @@
+# Configuracions privades
+README-INT.md
+
+# Configuració local
+config.json
+
+# Dependències Node
+node_modules/
+
+# Registres generats per scripts
+logs/

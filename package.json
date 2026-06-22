@@ -1,0 +1,15 @@
+{
+  "name": "crawler-puppeteer",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Crawler senzill implementat amb Puppeteer.",
+  "scripts": {
+    "crawl": "node src/crawler.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.0",
+    "puppeteer": "^23.4.0"
+  }
+}
+
+
