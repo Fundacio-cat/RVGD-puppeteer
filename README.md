@@ -28,8 +28,8 @@ Este proxecto, contén un rastrexador escrito en Node.js que utiliza Puppeteer p
 
 1. Clona o repositorio.
 ```bash
-git clone https://gitlab.com/pau_fundacio/gal_puppeteer
-cd "puppeteer"
+git clone https://github.com/Fundacio-cat/RVGD-puppeteer
+cd RVGD-puppeteer
 ```
 
 2. Instala as dependencias.
