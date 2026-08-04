@@ -9,7 +9,7 @@ set -euo pipefail
 
 PATH="/usr/local/bin:/usr/bin:/bin:${PATH}"
 
-home_crawler="/home/galego/gal_puppeteer"
+home_crawler="/home/galego/RVGD-puppeteer"
 rexistro="${home_crawler}/logs/monitor.log"
 script_crawler="${home_crawler}/src/crawler.js"
 config_ficheiro="${home_crawler}/config.json"
