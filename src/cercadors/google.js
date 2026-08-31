@@ -143,7 +143,7 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
   let duplicateCount = 0;
   let skippedByLimit = 0;
 
-  for (const anchor of anchors) {
+  for (const [index, anchor] of anchors.entries()) {
     if (results.length >= maxResults) {
       await anchor.dispose().catch(() => {});
       skippedByLimit++;
@@ -153,13 +153,22 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
     const entry = await procesaResultadoLigazon(anchor);
     await anchor.dispose().catch(() => {});
 
-    if (!entry || !entry.link || !entry.titol) {
+    if (!entry || entry.discardReason || !entry.link || !entry.titol) {
       discardedWithoutData++;
+      const reason = entry?.discardReason ?? 'entrada_nula_ou_incompleta';
+      const hrefPreview = entry?.href ?? entry?.link ?? '(sen href)';
+      const titolPreview = entry?.titol ?? '(sen título)';
+      console.warn(
+        `Descartado candidato #${index + 1}: motivo=${reason}; href=${hrefPreview}; título=${titolPreview}`
+      );
       continue;
     }
 
     if (seenUrls.has(entry.link)) {
       duplicateCount++;
+      console.warn(
+        `Descartado candidato #${index + 1} por duplicado: href=${entry.link}; título=${entry.titol}`
+      );
       continue;
     }
 
@@ -304,6 +313,7 @@ export async function executaProcuraGoogle(
 
 /**
  * Procesa un elemento de ligazón para extraer o título, a URL e a descrición.
+ * Se se descarta, devolve discardReason + href/titol para diagnóstico.
  */
 async function procesaResultadoLigazon(anchor) {
   try {
@@ -316,6 +326,14 @@ async function procesaResultadoLigazon(anchor) {
         return cleaned.length > 0 ? cleaned : null;
       };
 
+      const discard = (reason, extra = {}) => ({
+        discardReason: reason,
+        link: null,
+        titol: extra.titol ?? null,
+        href: extra.href ?? null,
+        description: extra.description ?? null,
+      });
+
       const evaluateNode = (context, xpath) => {
         try {
           return document
@@ -326,10 +344,13 @@ async function procesaResultadoLigazon(anchor) {
         }
       };
 
+      const rawHref = node.getAttribute('href') ?? null;
       const h3 = node.querySelector('h3');
       if (!h3) {
-        return null;
+        return discard('sen_h3', { href: rawHref });
       }
+
+      const titol = normalize(h3.textContent ?? '');
 
       let fallbackText = null;
       let esPregunta = false;
@@ -358,21 +379,27 @@ async function procesaResultadoLigazon(anchor) {
       }
 
       if (esPregunta) {
-        return { link: null, titol: null, description: fallbackText };
+        return discard('modulo_mais_preguntes', {
+          href: rawHref,
+          titol,
+          description: fallbackText,
+        });
       }
 
-      const link = node.getAttribute('href') ?? null;
-      if (!link || !link.startsWith('http')) {
-        return null;
+      const link = rawHref;
+      if (!link) {
+        return discard('sen_href', { titol });
+      }
+      if (!link.startsWith('http')) {
+        return discard('href_non_http', { href: link, titol });
       }
 
-      const titol = normalize(h3.textContent ?? '');
       if (!titol) {
-        return null;
+        return discard('titulo_baleiro', { href: link });
       }
 
       if (/[?¿]\s*$/.test(titol)) {
-        return null;
+        return discard('titulo_pregunta', { href: link, titol });
       }
 
       const collectLastSpanText = (element) => {
@@ -438,7 +465,7 @@ async function procesaResultadoLigazon(anchor) {
     });
   } catch (error) {
     console.error('procuraDatos: erro procesando un resultado.', error);
-    return null;
+    return { discardReason: 'erro_avaliacion', link: null, titol: null, href: null };
   }
 }
 

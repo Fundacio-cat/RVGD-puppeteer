@@ -20,7 +20,9 @@ mkdir -p "$(dirname "${rexistro}")"
 
 now_epoch="$(date +%s)"
 timestamp="$(date -d "@${now_epoch}" '+%Y-%m-%d %H:%M:%S')"
-atraso_segundos=$((((RANDOM << 15) | RANDOM) % (12 * 60 * 60)))
+# Atraso aleatorio: máximo 5 h 55 min (21300 s)
+atraso_max_segundos=$((5 * 60 * 60 + 55 * 60))
+atraso_segundos=$((((RANDOM << 15) | RANDOM) % (atraso_max_segundos + 1)))
 atraso_minutos=$((atraso_segundos / 60))
 atraso_formatado="$(printf '%02d:%02d:%02d' $((atraso_segundos / 3600)) $(((atraso_segundos % 3600) / 60)) $((atraso_segundos % 60)))"
 start_epoch=$((now_epoch + atraso_segundos))
@@ -34,7 +36,7 @@ start_timestamp="$(date -d "@${start_epoch}" '+%Y-%m-%d %H:%M:%S')"
 
 if (( atraso_segundos > 0 )); then
   echo "Inicio previsto en ${start_timestamp} (en ${atraso_formatado})."
-  #sleep "${atraso_segundos}"
+  sleep "${atraso_segundos}"
 fi
 
 (
