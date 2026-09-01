@@ -175,6 +175,12 @@ async function runCrawler(query, { databaseUrl = null, searchOptions = {}, brows
       );
     });
   }
+  // Se a conexión CDP co navegador se perde antes do peche explícito, os comandos
+  // pendentes (page.$, browser.close, ...) quedarán colgados ata esgotar o
+  // protocolTimeout sen dar ningunha pista do motivo real; isto deixa constancia.
+  browser.on('disconnected', () => {
+    console.warn('runCrawler: a conexión CDP co navegador desconectouse inesperadamente.');
+  });
   let page;
 
   try {

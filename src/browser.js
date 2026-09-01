@@ -394,10 +394,25 @@ export async function launchBrowser(launchOptions = {}) {
 }
 
 /**
+ * Rexistra listeners de diagnóstico para detectar canda o proceso renderizador
+ * morre ou queda nun estado zombi. Sen isto, un crash silencioso só se
+ * manifesta coma un ProtocolError xenérico despois de esgotar o protocolTimeout.
+ */
+function attachCrashDiagnostics(page) {
+  page.on('error', (error) => {
+    console.error('createStealthPage: a páxina CRASHEOU (proceso renderizador morto).', error);
+  });
+  page.on('close', () => {
+    console.warn('createStealthPage: a páxina pechouse inesperadamente.');
+  });
+}
+
+/**
  * Abre unha lapela nova e aplícalle a configuración stealth antes de devolvela.
  */
 export async function createStealthPage(browser) {
   const page = await browser.newPage();
+  attachCrashDiagnostics(page);
   await applyStealth(page);
   return page;
 }
