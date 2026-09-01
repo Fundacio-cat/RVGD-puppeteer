@@ -62,8 +62,11 @@ export async function performHumanScroll(page) {
       await page.mouse.wheel(0, -randomInt(200, 360));
       await humanPause(page, 160, 320);
     }
-  } catch {
-    // Ignorar erros de desprazamento para manter a robustez.
+  } catch (error) {
+    // Continúa sen desprazamento para manter a robustez, pero rexistra o erro:
+    // un timeout aquí adoita indicar que o navegador deixou de responder aos
+    // comandos de Puppeteer (páxina moi pesada, protocolTimeout esgotado, etc.).
+    console.warn('performHumanScroll: erro durante o desprazamento humanizado.', error);
   }
 
   await humanPause(page, 220, 420);

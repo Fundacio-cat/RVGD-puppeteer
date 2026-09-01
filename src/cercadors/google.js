@@ -23,19 +23,28 @@ function sanitizeForFilename(value) {
 }
 
 async function capturaContextoResultados(page, query) {
+  let screenshotPath = null;
+  let htmlPath = null;
+  let content = null;
+
   try {
     await mkdir(SCREENSHOT_DIR, { recursive: true });
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const baseName = sanitizeForFilename(query).slice(0, 60);
-    const screenshotPath = path.join(SCREENSHOT_DIR, `${timestamp}_${baseName}.png`);
+    screenshotPath = path.join(SCREENSHOT_DIR, `${timestamp}_${baseName}.png`);
 
     await page.screenshot({ path: screenshotPath, fullPage: true });
-    const content = await page.content();
+    content = await page.content();
+    htmlPath = path.join(SCREENSHOT_DIR, `${timestamp}_${baseName}.html`);
+    await writeFile(htmlPath, content, 'utf8');
 
     console.log(`Captura de pantalla gardada en ${screenshotPath}`);
+    console.log(`HTML da páxina gardado en ${htmlPath}`);
   } catch (error) {
     console.warn('Non se puido gardar o contexto da páxina de procura.', error);
   }
+
+  return { screenshotPath, htmlPath, content };
 }
 
 /**
@@ -282,7 +291,10 @@ async function recuperaLigazonsResultados(page) {
   // Priorizamos div#rso (resultados orgánicos "clásicos") fronte a div#search, que
   // tamén pode incluír módulos coma a Escolma xerada por IA que de momento non
   // queremos gardar. Se non existe div#rso, recorremos a div#search coma antes.
-  const rsoHandle = await page.$('div#rso').catch(() => null);
+  const rsoHandle = await page.$('div#rso').catch((error) => {
+    console.warn('recuperaLigazonsResultados: erro comprobando div#rso; asúmese que non existe.', error);
+    return null;
+  });
   const hasRso = !!rsoHandle;
   await rsoHandle?.dispose().catch(() => {});
   const containerSelector = hasRso ? 'div#rso' : 'div#search';
@@ -299,7 +311,10 @@ async function recuperaLigazonsResultados(page) {
   }
 
   const anchors = [];
-  const candidates = await page.$$(`${containerSelector} a`).catch(() => []);
+  const candidates = await page.$$(`${containerSelector} a`).catch((error) => {
+    console.warn(`recuperaLigazonsResultados: erro consultando "${containerSelector} a".`, error);
+    return [];
+  });
   console.log(`recuperaLigazonsResultados: CSS selector trobou ${candidates.length} candidatos de enllaces.`);
 
   for (const candidate of candidates) {
@@ -372,11 +387,11 @@ export class GoogleBlockedError extends Error {
   }
 }
 
-async function assertNonBloqueadoPorGoogle(page) {
+async function assertNonBloqueadoPorGoogle(page, content = null) {
   const currentUrl = page.url();
-  const content = await page.content().catch(() => null);
+  const resolvedContent = content ?? (await page.content().catch(() => null));
 
-  if (detectaBlocGoogle({ url: currentUrl, content })) {
+  if (detectaBlocGoogle({ url: currentUrl, content: resolvedContent })) {
     throw new GoogleBlockedError(
       `Google detectou o sensor e amosou un captcha/interstitial (${currentUrl}).`,
       { url: currentUrl }
@@ -439,8 +454,8 @@ export async function executaProcuraGoogle(
     .catch(() => null);
   await page.keyboard.press('Enter');
   await navigationPromise;
-  await capturaContextoResultados(page, query);
-  await assertNonBloqueadoPorGoogle(page);
+  const { content: paxinaContent } = await capturaContextoResultados(page, query);
+  await assertNonBloqueadoPorGoogle(page, paxinaContent);
 
   const results = await procuraDatos(page, maxResults, timeoutMs, { onResult });
 
