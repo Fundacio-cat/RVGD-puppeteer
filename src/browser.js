@@ -320,6 +320,10 @@ export async function launchBrowser(launchOptions = {}) {
     slowMo: slowMoPreference,
     protocolTimeout: protocolTimeoutPreference,
     defaultViewport: null,
+    // Evita o transporte por WebSocket (un socket TCP local) e comunícase con
+    // Chromium mediante pipes do sistema operativo: máis robusto en servidores
+    // onde se observaron desconexións CDP intermitentes e inexplicables.
+    pipe: true,
     ...remainingLaunchOptions,
     args: buildDefaultLaunchArgs(userArgs),
   };
