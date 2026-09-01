@@ -5,7 +5,7 @@ import { createStealthPage, launchBrowser, waitMs } from './browser.js';
 import { ensureDatabaseConnection, seguentCerca, seleccionaMides, guardaDb } from './database.js';
 import { seleccionaCercador } from './cercadors/@cercador.js';
 import { seleccionaNavegador } from './navegador.js';
-import { executaProcuraGoogle } from './cercadors/google.js';
+import { executaProcuraGoogle, GoogleBlockedError } from './cercadors/google.js';
 import { nomSensor } from './utils.js';
 
 /**
@@ -339,6 +339,12 @@ async function main() {
   try {
     await runCrawler(query, { databaseUrl, searchOptions, browserOptions });
   } catch (error) {
+    if (error instanceof GoogleBlockedError) {
+      console.warn(
+        `Detectado por Google (captcha/interstitial); saíndo sen gardar resultados. URL: ${error.googleUrl ?? 'descoñecida'}`
+      );
+      return;
+    }
     console.error('Erro durante a procura:', error);
     process.exitCode = 1;
   }

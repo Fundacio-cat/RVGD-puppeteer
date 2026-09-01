@@ -298,6 +298,70 @@ async function recuperaLigazonsResultados(page) {
   return anchors;
 }
 
+const GOOGLE_BLOCK_URL_TOKENS = ['/sorry/', '/interstitial/'];
+
+const GOOGLE_BLOCK_CONTENT_TOKENS = [
+  // Marcado técnico do captcha, independente do idioma.
+  'g-recaptcha',
+  'captcha-form',
+  'recaptcha__enterprise.js',
+  'solvesimplechallenge',
+  // Galego
+  'detectamos un tráfico inusual',
+  'resolve o captcha para continuar',
+  // Castelán (fallback habitual de Google cando non hai tradución completa)
+  'hemos detectado un tráfico inusual',
+  'estas solicitudes parecen generadas por ordenador',
+  // Catalán
+  'els nostres sistemes han detectat un trànsit inusual',
+  'resoleu el captcha',
+  // Inglés
+  'unusual traffic',
+  "verify you're not a robot",
+];
+
+/**
+ * Detecta se Google amosou un captcha ou unha páxina interticial de bloqueo
+ * en lugar dos resultados de procura habituais.
+ */
+function detectaBlocGoogle({ url, content } = {}) {
+  const normalizedUrl = (url ?? '').toLowerCase();
+  if (GOOGLE_BLOCK_URL_TOKENS.some((token) => normalizedUrl.includes(token))) {
+    return true;
+  }
+
+  if (!content) {
+    return false;
+  }
+
+  const normalizedContent = content.toLowerCase();
+  return GOOGLE_BLOCK_CONTENT_TOKENS.some((token) => normalizedContent.includes(token));
+}
+
+/**
+ * Erro específico para cando Google bloquea o sensor cun captcha/interstitial.
+ * Permítelle ao chamador (crawler.js) saír de xeito limpo sen tratalo como un fallo.
+ */
+export class GoogleBlockedError extends Error {
+  constructor(message, { url } = {}) {
+    super(message);
+    this.name = 'GoogleBlockedError';
+    this.googleUrl = url ?? null;
+  }
+}
+
+async function assertNonBloqueadoPorGoogle(page) {
+  const currentUrl = page.url();
+  const content = await page.content().catch(() => null);
+
+  if (detectaBlocGoogle({ url: currentUrl, content })) {
+    throw new GoogleBlockedError(
+      `Google detectou o sensor e amosou un captcha/interstitial (${currentUrl}).`,
+      { url: currentUrl }
+    );
+  }
+}
+
 /**
  * Realiza a secuencia completa de procura en Google e devolve os resultados atopados.
  */
@@ -318,6 +382,13 @@ export async function executaProcuraGoogle(
   });
 
   await humanPause(page, 220, 420);
+
+  if (detectaBlocGoogle({ url: page.url() })) {
+    throw new GoogleBlockedError(
+      `Google detectou o sensor ao cargar a páxina inicial (${page.url()}).`,
+      { url: page.url() }
+    );
+  }
 
   const consentAccepted = await aceptaCookiesGoogle(page);
   console.log(
@@ -347,6 +418,7 @@ export async function executaProcuraGoogle(
   await page.keyboard.press('Enter');
   await navigationPromise;
   await capturaContextoResultados(page, query);
+  await assertNonBloqueadoPorGoogle(page);
 
   const results = await procuraDatos(page, maxResults, timeoutMs, { onResult });
 
