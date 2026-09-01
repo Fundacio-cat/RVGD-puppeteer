@@ -107,6 +107,28 @@ export async function applyStealth(page) {
           ? Promise.resolve({ state: 'denied', onchange: null })
           : originalQuery(parameters);
     }
+
+    // Sen GPU real, Chromium renderiza por software e o WebGL expón "Google
+    // SwiftShader" coma renderer: é un dos sinais de detección de automatización
+    // máis coñecidos e usados polos sistemas antibot. Suplantámolo por valores
+    // habituais nun equipo de escritorio normal.
+    const spoofWebGLRenderer = (prototype) => {
+      if (!prototype || typeof prototype.getParameter !== 'function') {
+        return;
+      }
+      const originalGetParameter = prototype.getParameter;
+      prototype.getParameter = function (parameter) {
+        if (parameter === 37445) {
+          return 'Google Inc. (Intel)';
+        }
+        if (parameter === 37446) {
+          return 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5)';
+        }
+        return originalGetParameter.call(this, parameter);
+      };
+    };
+    spoofWebGLRenderer(window.WebGLRenderingContext?.prototype);
+    spoofWebGLRenderer(window.WebGL2RenderingContext?.prototype);
   });
 
   await page.setViewport({ width: 1366, height: 768, deviceScaleFactor: 1 });
