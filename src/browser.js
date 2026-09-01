@@ -83,21 +83,94 @@ export async function applyStealth(page) {
   await page.setExtraHTTPHeaders({
     'Accept-Language': 'gl-ES,gl;q=0.9,es-ES;q=0.8,pt-PT;q=0.7,en-US;q=0.6',
   });
+  // O Accept-Language declara Galicia/España; se o reloxo do sistema non
+  // coincidise (p.ex. UTC nun VPS), sería outra inconsistencia detectable.
+  if (typeof page.emulateTimezone === 'function') {
+    try {
+      await page.emulateTimezone('Europe/Madrid');
+    } catch (error) {
+      console.warn('applyStealth: non se puido emular o fuso horario.', error);
+    }
+  }
 
   await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    // navigator.webdriver: nun Chrome real esta propiedade NON existe coma
+    // propiedade propia. Eliminala (en vez de enmascarala cun getter propio)
+    // é o único xeito de que `navigator.hasOwnProperty('webdriver')` non delate
+    // o parche.
+    try {
+      delete Object.getPrototypeOf(navigator).webdriver;
+    } catch {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    }
 
-    window.navigator.chrome = {
-      runtime: {},
+    // window.chrome (NON navigator.chrome, que non existe en ningún navegador
+    // real e por tanto era el mesmo un sinal de automatización). Chrome
+    // headless sen parchear deixa `window.chrome` como `undefined`, un dos
+    // sinais de detección máis coñecidos.
+    window.chrome = {
+      app: {
+        isInstalled: false,
+        InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
+      },
+      runtime: {
+        OnInstalledReason: { CHROME_UPDATE: 'chrome_update', INSTALL: 'install', SHARED_MODULE_UPDATE: 'shared_module_update', UPDATE: 'update' },
+        OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
+        PlatformArch: { ARM: 'arm', ARM64: 'arm64', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
+        PlatformNaclArch: { ARM: 'arm', MIPS: 'mips', MIPS64: 'mips64', X86_32: 'x86-32', X86_64: 'x86-64' },
+        PlatformOs: { ANDROID: 'android', CROS: 'cros', LINUX: 'linux', MAC: 'mac', OPENBSD: 'openbsd', WIN: 'win' },
+        RequestUpdateCheckStatus: { NO_UPDATE: 'no_update', THROTTLED: 'throttled', UPDATE_AVAILABLE: 'update_available' },
+      },
+      csi: function () {},
+      loadTimes: function () {},
     };
 
     Object.defineProperty(navigator, 'languages', {
       get: () => ['gl-ES', 'gl', 'es-ES', 'pt-PT', 'en-US'],
     });
 
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => [1, 2, 3, 4, 5],
-    });
+    // navigator.plugins: constrúense instancias reais a partir dos
+    // construtores nativos (Plugin/PluginArray) para que `instanceof` e
+    // `Object.prototype.toString` se comporten coma nun navegador real, en
+    // vez dun array simple de números que se detecta cunha soa liña.
+    try {
+      const pluginsData = [
+        { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+        { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+        { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+        { name: 'Microsoft Edge PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+        { name: 'WebKit built-in PDF', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+      ];
+
+      const makePlugin = (data) => {
+        const plugin = Object.create(window.Plugin.prototype);
+        Object.defineProperty(plugin, 'name', { value: data.name, enumerable: true });
+        Object.defineProperty(plugin, 'filename', { value: data.filename, enumerable: true });
+        Object.defineProperty(plugin, 'description', { value: data.description, enumerable: true });
+        Object.defineProperty(plugin, 'length', { value: 1, enumerable: true });
+        return plugin;
+      };
+
+      const fakePlugins = pluginsData.map(makePlugin);
+      const pluginArray = Object.create(window.PluginArray.prototype);
+      fakePlugins.forEach((plugin, index) => {
+        Object.defineProperty(pluginArray, index, { value: plugin, enumerable: true });
+        Object.defineProperty(pluginArray, plugin.name, { value: plugin });
+      });
+      Object.defineProperty(pluginArray, 'length', { value: fakePlugins.length, enumerable: true });
+      pluginArray.item = function (index) {
+        return this[index] ?? null;
+      };
+      pluginArray.namedItem = function (name) {
+        return this[name] ?? null;
+      };
+      pluginArray.refresh = function () {};
+
+      Object.defineProperty(navigator, 'plugins', { get: () => pluginArray });
+    } catch {
+      // Se os construtores nativos non están dispoñibles, deixamos o valor por defecto.
+    }
 
     const permissions = window.navigator.permissions;
     if (permissions && typeof permissions.query === 'function') {
@@ -108,10 +181,25 @@ export async function applyStealth(page) {
           : originalQuery(parameters);
     }
 
+    // hardwareConcurrency/deviceMemory: algunhas VPS reportan valores pouco
+    // habituais nun equipo de escritorio (1-2 núcleos, etc.).
+    try {
+      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+    } catch {
+      // ignorar se non é configurable
+    }
+    if ('deviceMemory' in navigator) {
+      try {
+        Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+      } catch {
+        // ignorar se non é configurable
+      }
+    }
+
     // Sen GPU real, Chromium renderiza por software e o WebGL expón "Google
     // SwiftShader" coma renderer: é un dos sinais de detección de automatización
-    // máis coñecidos e usados polos sistemas antibot. Suplantámolo por valores
-    // habituais nun equipo de escritorio normal.
+    // máis coñecidos. Suplantámolo por valores coherentes coa UA declarada
+    // (Mac Intel), non por valores típicos de Windows/Linux coma antes.
     const spoofWebGLRenderer = (prototype) => {
       if (!prototype || typeof prototype.getParameter !== 'function') {
         return;
@@ -122,13 +210,67 @@ export async function applyStealth(page) {
           return 'Google Inc. (Intel)';
         }
         if (parameter === 37446) {
-          return 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics, OpenGL 4.5)';
+          return 'ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics OpenGL Engine, OpenGL 4.1)';
         }
         return originalGetParameter.call(this, parameter);
       };
     };
     spoofWebGLRenderer(window.WebGLRenderingContext?.prototype);
     spoofWebGLRenderer(window.WebGL2RenderingContext?.prototype);
+
+    // Ruído mínimo e imperceptible no fingerprint de Canvas: cambia o hash
+    // resultante sen alterar visualmente a imaxe, para non coincidir co hash
+    // coñecido do renderizado por software (SwiftShader).
+    try {
+      const noiseSeed = Math.random();
+      const addCanvasNoise = (imageData) => {
+        const { data } = imageData;
+        for (let i = 0; i < data.length; i += 4) {
+          if (((Math.sin(i * noiseSeed) * 10000) % 1) > 0.5) {
+            data[i] = (data[i] + 1) % 256;
+          }
+        }
+        return imageData;
+      };
+
+      const originalGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+      CanvasRenderingContext2D.prototype.getImageData = function (...args) {
+        return addCanvasNoise(originalGetImageData.apply(this, args));
+      };
+
+      const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+      HTMLCanvasElement.prototype.toDataURL = function (...args) {
+        try {
+          const ctx = this.getContext('2d');
+          if (ctx) {
+            const imageData = originalGetImageData.call(ctx, 0, 0, this.width, this.height);
+            addCanvasNoise(imageData);
+            ctx.putImageData(imageData, 0, 0);
+          }
+        } catch {
+          // Contexto non 2D (p.ex. WebGL): seguimos sen modificar.
+        }
+        return originalToDataURL.apply(this, args);
+      };
+    } catch {
+      // Se algo falla aquí, seguimos sen ruído de canvas en vez de romper a páxina.
+    }
+
+    // Ruído mínimo e imperceptible no fingerprint de AudioContext, polo mesmo motivo.
+    try {
+      if (typeof AudioBuffer !== 'undefined') {
+        const originalGetChannelData = AudioBuffer.prototype.getChannelData;
+        AudioBuffer.prototype.getChannelData = function (...args) {
+          const data = originalGetChannelData.apply(this, args);
+          for (let i = 0; i < data.length; i += 100) {
+            data[i] += (Math.random() * 2 - 1) * 1e-7;
+          }
+          return data;
+        };
+      }
+    } catch {
+      // Se algo falla aquí, seguimos sen ruído de audio en vez de romper a páxina.
+    }
   });
 
   await page.setViewport({ width: 1366, height: 768, deviceScaleFactor: 1 });

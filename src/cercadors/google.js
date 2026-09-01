@@ -186,9 +186,17 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
   // pode facer que a extracción se adiante e atope 0 candidatos. Ademais, priorizamos
   // div#rso (só resultados orgánicos "clásicos") fronte a div#search, que tamén inclúe
   // módulos coma a Escolma xerada por IA que de momento non queremos gardar.
+  // Google pode amosar primeiro a páxina de resultados normal e só despois, mediante
+  // JavaScript, redirixir a /sorry/ (verificación antibot) uns segundos máis tarde.
+  // Un check de bloqueo só xusto despois de navegar non colle esta redirección
+  // diferida; por iso o propio predicado tamén a vixía, para saír en canto pase
+  // en lugar de esgotar todo o timeout sen saber por que.
   await page
     .waitForFunction(
       () => {
+        if (location.pathname.startsWith('/sorry/') || location.pathname.startsWith('/interstitial/')) {
+          return true;
+        }
         const container = document.querySelector('div#rso') ?? document.querySelector('div#search');
         return !!container && container.querySelectorAll('a h3').length > 0;
       },
@@ -198,6 +206,13 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
       console.warn('procuraDatos: non se atoparon resultados orgánicos no tempo especificado.');
       return null;
     });
+
+  if (detectaBlocGoogle({ url: page.url() })) {
+    throw new GoogleBlockedError(
+      `Google detectou o sensor mentres se agardaba polos resultados (redirección diferida a ${page.url()}).`,
+      { url: page.url() }
+    );
+  }
   
   console.log('procuraDatos: realizando scroll humano...');
   await performHumanScroll(page);
