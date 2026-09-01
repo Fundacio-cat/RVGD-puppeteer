@@ -114,6 +114,59 @@ export async function aceptaCookiesGoogle(page) {
   return false;
 }
 
+const GOOGLE_REDIRECT_TIMEOUT_MS = 8_000;
+const GOOGLE_REDIRECT_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+/**
+ * Google xa non inclúe a URL de destino en claro no href dos resultados: agora usa
+ * redireccións opacas (`/goto?url=<token>`) que só se poden resolver seguindo o salto HTTP
+ * (Google responde cun 302 co `Location` real; non fai falla cargar a páxina de destino).
+ */
+async function resolveResultUrl(rawLink) {
+  if (!rawLink) {
+    return null;
+  }
+
+  if (rawLink.startsWith('http')) {
+    return rawLink;
+  }
+
+  let absoluteUrl;
+  try {
+    absoluteUrl = new URL(rawLink, 'https://www.google.com');
+  } catch {
+    return null;
+  }
+
+  const directParam = absoluteUrl.searchParams.get('q');
+  if (directParam && directParam.startsWith('http')) {
+    return directParam;
+  }
+
+  if (absoluteUrl.pathname !== '/goto' && absoluteUrl.pathname !== '/url') {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GOOGLE_REDIRECT_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(absoluteUrl, {
+      redirect: 'manual',
+      signal: controller.signal,
+      headers: { 'User-Agent': GOOGLE_REDIRECT_USER_AGENT },
+    });
+    const location = response.headers.get('location');
+    return location && location.startsWith('http') ? location : null;
+  } catch (error) {
+    console.warn(`resolveResultUrl: non se puido resolver a redirección de "${rawLink}".`, error);
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 /**
  * Recorre as ligazóns visibles e constrúe resultados con título, URL e descrición.
  */
@@ -164,17 +217,26 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
       continue;
     }
 
-    if (seenUrls.has(entry.link)) {
+    const resolvedUrl = await resolveResultUrl(entry.link);
+    if (!resolvedUrl) {
+      discardedWithoutData++;
+      console.warn(
+        `Descartado candidato #${index + 1}: non se puido resolver a URL real; href=${entry.link}; título=${entry.titol}`
+      );
+      continue;
+    }
+
+    if (seenUrls.has(resolvedUrl)) {
       duplicateCount++;
       console.warn(
-        `Descartado candidato #${index + 1} por duplicado: href=${entry.link}; título=${entry.titol}`
+        `Descartado candidato #${index + 1} por duplicado: href=${resolvedUrl}; título=${entry.titol}`
       );
       continue;
     }
 
     const normalizedResult = {
       title: entry.titol,
-      url: entry.link,
+      url: resolvedUrl,
       snippet: entry.description ?? '',
     };
 
@@ -189,7 +251,7 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
       }
     }
 
-    seenUrls.add(entry.link);
+    seenUrls.add(resolvedUrl);
 
     if (results.length < maxResults) {
       await humanPause(page, 260, 520);
@@ -286,19 +348,6 @@ export async function executaProcuraGoogle(
   await navigationPromise;
   await capturaContextoResultados(page, query);
 
-  // Debug: comprova si existe div#search
-  const hasSearchDiv = await page.evaluate(() => {
-    const searchDiv = document.querySelector('div#search');
-    const allDivs = document.querySelectorAll('div[id]');
-    const divIds = Array.from(allDivs).map(d => d.id).slice(0, 20);
-    return {
-      hasSearch: !!searchDiv,
-      searchDivId: searchDiv?.id ?? null,
-      firstDivIds: divIds,
-    };
-  });
-  console.log('Debug estructura DOM:', JSON.stringify(hasSearchDiv, null, 2));
-
   const results = await procuraDatos(page, maxResults, timeoutMs, { onResult });
 
   if (results.length === 0) {
@@ -389,9 +438,6 @@ async function procesaResultadoLigazon(anchor) {
       const link = rawHref;
       if (!link) {
         return discard('sen_href', { titol });
-      }
-      if (!link.startsWith('http')) {
-        return discard('href_non_http', { href: link, titol });
       }
 
       if (!titol) {
