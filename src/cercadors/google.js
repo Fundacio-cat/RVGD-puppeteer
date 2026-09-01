@@ -171,11 +171,24 @@ async function resolveResultUrl(rawLink) {
  * Recorre as ligazóns visibles e constrúe resultados con título, URL e descrición.
  */
 export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {}) {
-  console.log('procuraDatos: agardando o selector div#search...');
-  await page.waitForSelector('div#search', { timeout: timeoutMs }).catch(() => {
-    console.warn('procuraDatos: non se atopou div#search no tempo especificado.');
-    return null;
-  });
+  console.log('procuraDatos: agardando resultados orgánicos...');
+  // Con módulos coma "Escolma xerada por IA" ou "Máis preguntas", Google pinta antes
+  // o contedor baleiro que o seu contido; agardar só pola existencia de div#search
+  // pode facer que a extracción se adiante e atope 0 candidatos. Ademais, priorizamos
+  // div#rso (só resultados orgánicos "clásicos") fronte a div#search, que tamén inclúe
+  // módulos coma a Escolma xerada por IA que de momento non queremos gardar.
+  await page
+    .waitForFunction(
+      () => {
+        const container = document.querySelector('div#rso') ?? document.querySelector('div#search');
+        return !!container && container.querySelectorAll('a h3').length > 0;
+      },
+      { timeout: timeoutMs }
+    )
+    .catch(() => {
+      console.warn('procuraDatos: non se atoparon resultados orgánicos no tempo especificado.');
+      return null;
+    });
   
   console.log('procuraDatos: realizando scroll humano...');
   await performHumanScroll(page);
@@ -266,9 +279,18 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
 }
 
 async function recuperaLigazonsResultados(page) {
+  // Priorizamos div#rso (resultados orgánicos "clásicos") fronte a div#search, que
+  // tamén pode incluír módulos coma a Escolma xerada por IA que de momento non
+  // queremos gardar. Se non existe div#rso, recorremos a div#search coma antes.
+  const rsoHandle = await page.$('div#rso').catch(() => null);
+  const hasRso = !!rsoHandle;
+  await rsoHandle?.dispose().catch(() => {});
+  const containerSelector = hasRso ? 'div#rso' : 'div#search';
+  console.log(`recuperaLigazonsResultados: usando contedor "${containerSelector}".`);
+
   if (page && typeof page.$x === 'function') {
     try {
-      const xpathResults = await page.$x('//div[@id="search"]//a[h3]');
+      const xpathResults = await page.$x(`//div[@id="${hasRso ? 'rso' : 'search'}"]//a[h3]`);
       console.log(`recuperaLigazonsResultados: XPath trobou ${xpathResults.length} resultados.`);
       return xpathResults;
     } catch (error) {
@@ -277,7 +299,7 @@ async function recuperaLigazonsResultados(page) {
   }
 
   const anchors = [];
-  const candidates = await page.$$('div#search a').catch(() => []);
+  const candidates = await page.$$(`${containerSelector} a`).catch(() => []);
   console.log(`recuperaLigazonsResultados: CSS selector trobou ${candidates.length} candidatos de enllaces.`);
 
   for (const candidate of candidates) {
