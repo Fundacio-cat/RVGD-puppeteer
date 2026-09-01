@@ -69,6 +69,12 @@ async function main() {
 
     await medido('applyStealth (inclúe setViewport 1366x768)', () => applyStealth(page));
 
+    // No pipeline real (crawler.js), o viewport defínese ANTES de navegar,
+    // non despois. Corrixido aquí para non introducir un artefacto propio.
+    await medido('setViewport (1920x1080, coma no sensor, ANTES de navegar)', () =>
+      page.setViewport({ width: 1920, height: 1080 })
+    );
+
     page.setDefaultTimeout(timeoutMs);
     page.setDefaultNavigationTimeout(timeoutMs);
 
@@ -101,27 +107,49 @@ async function main() {
       await navigationPromise;
     });
 
-    // Segundo setViewport, coma fai crawler.js despois de seleccionaMides().
-    await medido('segundo setViewport (1920x1080, coma no sensor)', () =>
-      page.setViewport({ width: 1920, height: 1080 })
-    );
-
     await mkdir('/tmp/diagnostic-screenshots', { recursive: true }).catch(() => {});
     await medido('page.screenshot({ fullPage: true }) <-- SOSPEITOSO PRINCIPAL', () =>
       page.screenshot({ path: '/tmp/diagnostic-screenshots/diag.png', fullPage: true })
     );
 
-    await medido('page.content() despois do screenshot', () => page.content());
+    const contentAntes = await medido('page.content() despois do screenshot', () => page.content());
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile('/tmp/diagnostic-screenshots/antes-wait.html', contentAntes, 'utf8').catch(() => {});
 
-    await medido('waitForFunction resultados orgánicos (div#rso/search a h3)', () =>
-      page.waitForFunction(
-        () => {
-          const container = document.querySelector('div#rso') ?? document.querySelector('div#search');
-          return !!container && container.querySelectorAll('a h3').length > 0;
-        },
-        { timeout: timeoutMs }
-      )
-    );
+    try {
+      await medido('waitForFunction resultados orgánicos (div#rso/search a h3)', () =>
+        page.waitForFunction(
+          () => {
+            const container = document.querySelector('div#rso') ?? document.querySelector('div#search');
+            return !!container && container.querySelectorAll('a h3').length > 0;
+          },
+          { timeout: timeoutMs }
+        )
+      );
+    } catch (error) {
+      // Se fallou, gardamos o DOM tal cal está nese intre e contamos á man
+      // canto hai, para saber se realmente non hai resultados ou se é outra cousa.
+      const diagnostico = await page
+        .evaluate(() => ({
+          hasRso: !!document.querySelector('div#rso'),
+          hasSearch: !!document.querySelector('div#search'),
+          rsoAnchorsWithH3: document.querySelector('div#rso')
+            ? document.querySelector('div#rso').querySelectorAll('a h3').length
+            : null,
+          searchAnchorsWithH3: document.querySelector('div#search')
+            ? document.querySelector('div#search').querySelectorAll('a h3').length
+            : null,
+          bodyTextSnippet: document.body?.innerText?.slice(0, 300) ?? null,
+          url: location.href,
+        }))
+        .catch((evalError) => ({ evalError: String(evalError) }));
+      console.error(`[${timestamp()}] Diagnóstico despois do fallo de waitForFunction:`, diagnostico);
+      const contentDespois = await page.content().catch(() => null);
+      if (contentDespois) {
+        await writeFile('/tmp/diagnostic-screenshots/despois-wait.html', contentDespois, 'utf8').catch(() => {});
+      }
+      throw error;
+    }
 
     await medido('performHumanScroll', () => performHumanScroll(page));
 
