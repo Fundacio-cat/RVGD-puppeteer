@@ -103,3 +103,7 @@ chmod +x /home/catalanet/puppeteer/executa_crawler.bash
 35 4 * * * CRON_WAIT=1 /home/catalanet/puppeteer/executa_crawler.bash
 ```
 A variable `CRON_WAIT=1` obriga o script a esperar a que remate o proceso e así recolle todos os rexistros antes de saír.
+
+## Comprobación da rede antes de instalar un sensor
+
+O directorio [`detecta-rede/`](detecta-rede/) contén un programa para Windows e Linux que comproba se a rede dunha persoa acolledora cumpre os requisitos de conexión do sensor (DHCP, DNS, NTP, webs necesarias e túnel WireGuard co servidor). Consulta o seu [README](detecta-rede/README.md) para compilalo e distribuílo.

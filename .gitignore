@@ -1,11 +1,18 @@
-# Configuracions privades
+# Ficheiros internos
 README-INT.md
-
-# Configuració local
 config.json
 
-# Dependències Node
+# Módulos de Node
 node_modules/
 
-# Registres generats per scripts
+# Logs
 logs/
+
+# detecta-rede: o código súbese; a configuración WireGuard (contén a clave do cliente de probas), os binarios e os informes NON
+detecta-rede/conf/*.conf
+detecta-rede/*.conf
+detecta-rede/dist/
+detecta-rede/informe-red-*
+
+# Ficheiros de macOS
+.DS_Store
