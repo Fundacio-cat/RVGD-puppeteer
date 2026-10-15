@@ -145,7 +145,7 @@ func (in *informe) conta(n nivel) int {
 func main() {
 	rutaConf := flag.String("conf", "", "fichero de configuración de WireGuard (por defecto, el incluido en el programa)")
 	servidor := flag.String("servidor", "10.66.66.1", "IP del servidor dentro del túnel")
-	bd := flag.String("bd", "", "host:puerto de Postgres dentro del túnel (por defecto se prueban los puertos 51432 y 5432 del servidor)")
+	bd := flag.String("bd", "", "host:puerto de Postgres dentro del túnel (por defecto, el puerto 51432 del servidor)")
 	duracion := flag.Duration("duracion", 60*time.Second, "duración de la prueba de estabilidad (0 para omitirla)")
 	nonInteractivo := flag.Bool("no-interactivo", false, "no mostrar ventanas ni preguntas")
 	detalle := flag.Bool("detalle", false, "mostrar el detalle técnico en la consola")

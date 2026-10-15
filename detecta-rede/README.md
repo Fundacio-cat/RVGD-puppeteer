@@ -80,7 +80,7 @@ Instrucións para a persoa acolledora (en castelán):
 |---|---|---|
 | `-conf` | a incrustada | Ficheiro WireGuard alternativo (para probas) |
 | `-servidor` | `10.66.66.1` | IP do servidor dentro do túnel |
-| `-bd` | proba `:51432` e `:5432` do servidor | `host:porto` de Postgres dentro do túnel |
+| `-bd` | porto `51432` do servidor | `host:porto` de Postgres dentro do túnel |
 | `-duracion` | `60s` | Proba de estabilidade (`0` para omitila) |
 | `-no-interactivo` | | Sen xanelas nin preguntas |
 | `-detalle` | | Amosa o detalle técnico na consola |

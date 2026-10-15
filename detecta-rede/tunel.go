@@ -326,21 +326,18 @@ func comprobaTunel(in *informe, cfg *configWG, errConf error, orixe, servidor, b
 	}
 }
 
+// portoBD é o porto de Postgres no servidor, dentro do túnel.
+const portoBD = 51432
+
 func comprobaBD(in *informe, tnet *netstack.Net, srv netip.Addr, bd string) {
-	candidatas := []string{bd}
 	if bd == "" {
-		candidatas = []string{
-			netip.AddrPortFrom(srv, 51432).String(),
-			netip.AddrPortFrom(srv, 5432).String(),
-		}
+		bd = netip.AddrPortFrom(srv, portoBD).String()
 	}
-	for _, dir := range candidatas {
-		if ePostgres, err := sondaPostgres(tnet, dir); err == nil && ePostgres {
-			in.add("Base de datos", nivelOK, "responde en "+dir, "")
-			return
-		}
+	if ePostgres, err := sondaPostgres(tnet, bd); err == nil && ePostgres {
+		in.add("Base de datos", nivelOK, "responde en "+bd, "")
+		return
 	}
-	in.add("Base de datos", nivelAviso, "el túnel funciona pero no se llega a la base de datos ("+strings.Join(candidatas, ", ")+")",
+	in.add("Base de datos", nivelAviso, "el túnel funciona pero no se llega a la base de datos ("+bd+")",
 		"Revisar la configuración del servidor para el cliente de pruebas (no depende de vuestra red).")
 }
 
