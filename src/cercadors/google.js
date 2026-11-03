@@ -126,13 +126,58 @@ export async function aceptaCookiesGoogle(page) {
 const GOOGLE_REDIRECT_TIMEOUT_MS = 8_000;
 const GOOGLE_REDIRECT_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+// Esperas entre intentos cando Google non devolve a redirección. Observouse que, tras
+// varias peticións seguidas, Google deixa de responder co 302 durante uns segundos.
+const GOOGLE_REDIRECT_RETRY_DELAYS_MS = [1_500, 4_000];
+
+/**
+ * Devolve as cookies que o navegador ten para Google en formato de cabeceira `Cookie`,
+ * para que as peticións de resolución de URL parezan da mesma sesión que fixo a procura.
+ */
+async function cookiesGoogle(page) {
+  try {
+    const cookies = await page.cookies('https://www.google.com');
+    return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
+  } catch (error) {
+    console.warn('cookiesGoogle: non se puideron ler as cookies do navegador.', error);
+    return '';
+  }
+}
+
+async function pideRedireccionGoogle(absoluteUrl, cookieHeader) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GOOGLE_REDIRECT_TIMEOUT_MS);
+
+  const headers = {
+    'User-Agent': GOOGLE_REDIRECT_USER_AGENT,
+    'Accept-Language': 'gl-ES,gl;q=0.9,es-ES;q=0.8,pt-PT;q=0.7,en-US;q=0.6',
+    Referer: 'https://www.google.com/',
+  };
+  if (cookieHeader) {
+    headers.Cookie = cookieHeader;
+  }
+
+  try {
+    const response = await fetch(absoluteUrl, {
+      redirect: 'manual',
+      signal: controller.signal,
+      headers,
+    });
+    return { status: response.status, location: response.headers.get('location') };
+  } catch (error) {
+    return { status: null, location: null, error };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 /**
  * Google xa non inclúe a URL de destino en claro no href dos resultados: agora usa
  * redireccións opacas (`/goto?url=<token>`) que só se poden resolver seguindo o salto HTTP
  * (Google responde cun 302 co `Location` real; non fai falla cargar a páxina de destino).
+ * Se Google non devolve a redirección, reinténtase tras unhas esperas curtas.
  */
-async function resolveResultUrl(rawLink) {
+async function resolveResultUrl(rawLink, { cookieHeader = '' } = {}) {
   if (!rawLink) {
     return null;
   }
@@ -157,22 +202,38 @@ async function resolveResultUrl(rawLink) {
     return null;
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), GOOGLE_REDIRECT_TIMEOUT_MS);
+  for (let intento = 0; ; intento += 1) {
+    const { status, location, error } = await pideRedireccionGoogle(absoluteUrl, cookieHeader);
 
-  try {
-    const response = await fetch(absoluteUrl, {
-      redirect: 'manual',
-      signal: controller.signal,
-      headers: { 'User-Agent': GOOGLE_REDIRECT_USER_AGENT },
-    });
-    const location = response.headers.get('location');
-    return location && location.startsWith('http') ? location : null;
-  } catch (error) {
-    console.warn(`resolveResultUrl: non se puido resolver a redirección de "${rawLink}".`, error);
-    return null;
-  } finally {
-    clearTimeout(timeoutId);
+    if (location && location.startsWith('http')) {
+      // Unha redirección á páxina de captcha de Google non é un resultado.
+      if (detectaBlocGoogle({ url: location })) {
+        console.warn(`resolveResultUrl: Google redirixiu "${rawLink}" á páxina de bloqueo (${location}).`);
+        return null;
+      }
+      if (intento > 0) {
+        console.log(`resolveResultUrl: URL resolta no intento ${intento + 1}.`);
+      }
+      return location;
+    }
+
+    let motivo;
+    if (error) {
+      motivo = error.name === 'AbortError' ? 'tempo esgotado' : error.message;
+    } else {
+      motivo = `HTTP ${status}, ${location ? `Location=${location}` : 'sen Location'}`;
+    }
+
+    if (intento >= GOOGLE_REDIRECT_RETRY_DELAYS_MS.length) {
+      console.warn(
+        `resolveResultUrl: non se puido resolver "${rawLink}" tras ${intento + 1} intentos (${motivo}).`
+      );
+      return null;
+    }
+
+    const espera = GOOGLE_REDIRECT_RETRY_DELAYS_MS[intento];
+    console.warn(`resolveResultUrl: intento ${intento + 1} sen redirección (${motivo}); reinténtase en ${espera} ms.`);
+    await waitMs(null, espera);
   }
 }
 
@@ -227,6 +288,7 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
     );
   }
   const totalCandidates = entradas.length;
+  const cookieHeader = totalCandidates > 0 ? await cookiesGoogle(page) : '';
 
   if (totalCandidates === 0) {
     console.warn('Non se detectou ningún bloque de resultado en Google cos selectores actuais.');
@@ -255,7 +317,7 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
       continue;
     }
 
-    const resolvedUrl = await resolveResultUrl(entry.link);
+    const resolvedUrl = await resolveResultUrl(entry.link, { cookieHeader });
     if (!resolvedUrl) {
       discardedWithoutData++;
       console.warn(
