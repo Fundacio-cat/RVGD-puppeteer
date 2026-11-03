@@ -12,7 +12,7 @@ logs/
 detecta-rede/conf/*.conf
 detecta-rede/*.conf
 detecta-rede/dist/
-detecta-rede/informe-red-*
+detecta-rede/informe-rede-*
 
 # Ficheiros de macOS
 .DS_Store

@@ -25,12 +25,12 @@ igual que fará o sensor.
 | Ruta de rede | Dobre router, CGNAT |
 | Túnel | Handshake (porto UDP do `Endpoint` de `test.conf`), ping ao servidor, Postgres (sen credenciais), MTU, estabilidade |
 
-Resultado: **APTA**, **APTA CON AVISOS** ou **NO APTA**, e un informe `.txt` e `.json`.
+Resultado: **APTA**, **APTA CON AVISOS** ou **NON APTA**, e un informe `.txt` e `.json`.
 
 As mensaxes que ve o usuario están en [`textos.json`](textos.json) e pódense cambiar
-sen tocar o código (ver [Textos](#textos)). Agora están en castelán, como o documento de
-requisitos de conexión que se entrega ás persoas acolledoras. O código, os comentarios e
-esta documentación están en galego.
+sen tocar o código (ver [Textos](#textos)). Están en galego, como o código, os
+comentarios e esta documentación. Os botóns das xanelas de Windows (Si/Non, Aceptar)
+pono o sistema, no idioma de Windows; en macOS saen de `textos.json`.
 
 ## Que ve a persoa acolledora
 
@@ -82,20 +82,38 @@ A persoa acolledora recibe **un só ficheiro** e non ten que instalar nada:
 - **macOS 12 ou posterior (Intel e Apple Silicon):** `detecta-rede-macos.zip`. Envíase
   comprimido para conservar o permiso de execución.
 
-Instrucións para a persoa acolledora en Windows (en castelán):
+Instrucións para a persoa acolledora, primeiro en galego e despois en castelán. Os
+nomes dos botóns de Windows e macOS son os que aparecen co sistema en castelán.
+
+**Windows (galego)**
+
+> 1. Conectade o ordenador á wifi principal do router onde irá o sensor (ou por cable).
+> 2. Facede dobre clic en `detecta-rede.exe`. Se Windows avisa de que é unha aplicación descoñecida, premede «Más información» → «Ejecutar de todas formas». Se pregunta polo firewall, podedes cancelar.
+> 3. Agardade uns 3 minutos. Aparecerá unha xanela que di se a rede é válida ou non.
+> 4. Ao premer Aceptar abrirase o cartafol co informe: enviádenos o ficheiro `informe-rede-…txt`.
+
+**Windows (castellano)**
 
 > 1. Conectad el ordenador a la wifi principal del router donde irá el sensor (o por cable).
 > 2. Haced doble clic en `detecta-rede.exe`. Si Windows avisa de que es una aplicación desconocida, pulsad «Más información» → «Ejecutar de todas formas». Si pregunta por el firewall, podéis cancelar.
-> 3. Esperad unos 3 minutos. Aparecerá una ventana que dice si la red es válida o no.
-> 4. Al pulsar Aceptar se abrirá la carpeta con el informe: enviadnos el fichero `informe-red-…txt`.
+> 3. Esperad unos 3 minutos. Aparecerá una ventana (en gallego) que dice si la red es válida o no.
+> 4. Al pulsar Aceptar se abrirá la carpeta con el informe: enviadnos el fichero `informe-rede-…txt`.
 
-Instrucións para a persoa acolledora en macOS (en castelán):
+**macOS (galego)**
+
+> 1. Conectade o Mac á wifi principal do router onde irá o sensor (ou por cable).
+> 2. Abride `detecta-rede-macos.zip` (descomprímese só) e facede dobre clic en `detecta-rede`.
+> 3. A primeira vez, macOS dirá que non pode verificar o programa: premede «OK» (ou «Hecho»). Ide a **Ajustes del Sistema → Privacidad y seguridad**, baixade ata o final e premede **«Abrir igualmente»**. Volvede facer dobre clic en `detecta-rede` e confirmade «Abrir igualmente».
+> 4. Abrirase unha xanela de Terminal coa proba. Agardade uns 3 minutos. Se macOS pregunta se o Terminal pode acceder ao cartafol Descargas, premede «Permitir».
+> 5. Aparecerá unha xanela que di se a rede é válida ou non. Ao premer Aceptar abrirase o cartafol co informe: enviádenos o ficheiro `informe-rede-…txt`.
+
+**macOS (castellano)**
 
 > 1. Conectad el Mac a la wifi principal del router donde irá el sensor (o por cable).
 > 2. Abrid `detecta-rede-macos.zip` (se descomprime solo) y haced doble clic en `detecta-rede`.
 > 3. La primera vez, macOS dirá que no puede verificar el programa: pulsad «OK» (o «Hecho»). Id a **Ajustes del Sistema → Privacidad y seguridad**, bajad hasta abajo y pulsad **«Abrir igualmente»**. Volved a hacer doble clic en `detecta-rede` y confirmad «Abrir igualmente».
-> 4. Se abrirá una ventana de Terminal con la prueba. Esperad unos 3 minutos. Si macOS pregunta si el Terminal puede acceder a la carpeta Descargas, pulsad «Permitir».
-> 5. Aparecerá una ventana que dice si la red es válida o no. Al pulsar Aceptar se abrirá la carpeta con el informe: enviadnos el fichero `informe-red-…txt`.
+> 4. Se abrirá una ventana de Terminal con la prueba (en gallego). Esperad unos 3 minutos. Si macOS pregunta si el Terminal puede acceder a la carpeta Descargas, pulsad «Permitir».
+> 5. Aparecerá una ventana que dice si la red es válida o no. Al pulsar Aceptar se abrirá la carpeta con el informe: enviadnos el fichero `informe-rede-…txt`.
 
 O executable de macOS só ten unha sinatura *ad hoc*: sen unha conta de Apple
 Developer (sinatura *Developer ID* e notarización), macOS bloquéao a primeira vez e
