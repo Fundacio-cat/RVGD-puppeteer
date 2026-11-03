@@ -220,8 +220,13 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
   console.log('procuraDatos: recuperando ligazóns de resultados...');
   const results = [];
   const seenUrls = new Set();
-  const anchors = await recuperaLigazonsResultados(page);
-  const totalCandidates = anchors.length;
+  const { contedor, totalLigazons, entradas } = await extraeResultadosPagina(page);
+  if (contedor) {
+    console.log(
+      `procuraDatos: usando contedor "${contedor}" (${totalLigazons} ligazóns, ${entradas.length} con título).`
+    );
+  }
+  const totalCandidates = entradas.length;
 
   if (totalCandidates === 0) {
     console.warn('Non se detectou ningún bloque de resultado en Google cos selectores actuais.');
@@ -233,15 +238,11 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
   let duplicateCount = 0;
   let skippedByLimit = 0;
 
-  for (const [index, anchor] of anchors.entries()) {
+  for (const [index, entry] of entradas.entries()) {
     if (results.length >= maxResults) {
-      await anchor.dispose().catch(() => {});
       skippedByLimit++;
       continue;
     }
-
-    const entry = await procesaResultadoLigazon(anchor);
-    await anchor.dispose().catch(() => {});
 
     if (!entry || entry.discardReason || !entry.link || !entry.titol) {
       discardedWithoutData++;
@@ -302,52 +303,185 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
   return results;
 }
 
-async function recuperaLigazonsResultados(page) {
-  // Priorizamos div#rso (resultados orgánicos "clásicos") fronte a div#search, que
-  // tamén pode incluír módulos coma a Escolma xerada por IA que de momento non
-  // queremos gardar. Se non existe div#rso, recorremos a div#search coma antes.
-  const rsoHandle = await page.$('div#rso').catch((error) => {
-    console.warn('recuperaLigazonsResultados: erro comprobando div#rso; asúmese que non existe.', error);
-    return null;
-  });
-  const hasRso = !!rsoHandle;
-  await rsoHandle?.dispose().catch(() => {});
-  const containerSelector = hasRso ? 'div#rso' : 'div#search';
-  console.log(`recuperaLigazonsResultados: usando contedor "${containerSelector}".`);
-
-  if (page && typeof page.$x === 'function') {
-    try {
-      const xpathResults = await page.$x(`//div[@id="${hasRso ? 'rso' : 'search'}"]//a[h3]`);
-      console.log(`recuperaLigazonsResultados: XPath trobou ${xpathResults.length} resultados.`);
-      return xpathResults;
-    } catch (error) {
-      console.warn('Non se puido obter os resultados con XPath; empregarase o fallback CSS.', error);
-    }
-  }
-
-  const anchors = [];
-  const candidates = await page.$$(`${containerSelector} a`).catch((error) => {
-    console.warn(`recuperaLigazonsResultados: erro consultando "${containerSelector} a".`, error);
-    return [];
-  });
-  console.log(`recuperaLigazonsResultados: CSS selector trobou ${candidates.length} candidatos de enllaces.`);
-
-  for (const candidate of candidates) {
-    try {
-      const heading = await candidate.$('h3');
-      if (heading) {
-        anchors.push(candidate);
-        await heading.dispose().catch(() => {});
-      } else {
-        await candidate.dispose().catch(() => {});
+/**
+ * Extrae nunha soa chamada ao navegador o título, a URL e a descrición de todas as
+ * ligazóns con título (a > h3) do contedor de resultados. Antes facíase elemento a
+ * elemento, con varias ordes CDP por ligazón, e nas Raspberry Pi algunha desas
+ * ordes (DOM.describeNode) quedaba bloqueada ata esgotar o protocolTimeout.
+ * Se unha ligazón se descarta, a entrada leva discardReason + href/titol para diagnóstico.
+ */
+async function extraeResultadosPagina(page) {
+  try {
+    return await page.evaluate(() => {
+      // Priorizamos div#rso (resultados orgánicos "clásicos") fronte a div#search, que
+      // tamén pode incluír módulos coma a Escolma xerada por IA que de momento non
+      // queremos gardar. Se non existe div#rso, recorremos a div#search.
+      const contedor = document.querySelector('div#rso') ?? document.querySelector('div#search');
+      if (!contedor) {
+        return { contedor: null, totalLigazons: 0, entradas: [] };
       }
-    } catch {
-      await candidate.dispose().catch(() => {});
-    }
-  }
 
-  console.log(`recuperaLigazonsResultados: fallback CSS filtrando h3 trobou ${anchors.length} resultados.`);
-  return anchors;
+      const normalize = (text) => {
+        if (!text) {
+          return null;
+        }
+        const cleaned = text.replace(/\s+/g, ' ').trim();
+        return cleaned.length > 0 ? cleaned : null;
+      };
+
+      const discard = (reason, extra = {}) => ({
+        discardReason: reason,
+        link: null,
+        titol: extra.titol ?? null,
+        href: extra.href ?? null,
+        description: extra.description ?? null,
+      });
+
+      const evaluateNode = (context, xpath) => {
+        try {
+          return document
+            .evaluate(xpath, context, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null)
+            .singleNodeValue;
+        } catch {
+          return null;
+        }
+      };
+
+      const collectLastSpanText = (element) => {
+        if (!element) {
+          return null;
+        }
+        const snapshot = document.evaluate(
+          './/span',
+          element,
+          null,
+          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+          null
+        );
+        if (!snapshot || snapshot.snapshotLength === 0) {
+          return null;
+        }
+        const target = snapshot.snapshotItem(snapshot.snapshotLength - 1);
+        return normalize(target?.textContent ?? '');
+      };
+
+      const procesa = (node) => {
+        const rawHref = node.getAttribute('href') ?? null;
+        const h3 = node.querySelector('h3');
+        if (!h3) {
+          return discard('sen_h3', { href: rawHref });
+        }
+
+        const titol = normalize(h3.textContent ?? '');
+
+        let fallbackText = null;
+        let esPregunta = false;
+
+        try {
+          const divPreguntes = evaluateNode(
+            h3,
+            './parent::span/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div'
+          );
+          if (divPreguntes) {
+            const divMesPreguntes = evaluateNode(divPreguntes, './div/div[1]/div/div');
+            if (divMesPreguntes) {
+              const mesPreguntes = evaluateNode(divMesPreguntes, './/span');
+              if (mesPreguntes) {
+                const text = mesPreguntes.textContent ?? '';
+                const normalized = text.trim().toLowerCase();
+                fallbackText = normalize(text);
+                if (normalized.includes('preguntes')) {
+                  esPregunta = true;
+                }
+              }
+            }
+          }
+        } catch {
+          // Ignóranse erros de detección para continuar o procesamento.
+        }
+
+        if (esPregunta) {
+          return discard('modulo_mais_preguntes', {
+            href: rawHref,
+            titol,
+            description: fallbackText,
+          });
+        }
+
+        const link = rawHref;
+        if (!link) {
+          return discard('sen_href', { titol });
+        }
+
+        if (!titol) {
+          return discard('titulo_baleiro', { href: link });
+        }
+
+        if (/[?¿]\s*$/.test(titol)) {
+          return discard('titulo_pregunta', { href: link, titol });
+        }
+
+        let description = null;
+        const primaryParent = evaluateNode(
+          node,
+          './parent::span/parent::div/parent::div/parent::div/parent::div/parent::div'
+        );
+        if (primaryParent) {
+          let descriptionNode = evaluateNode(primaryParent, './div/div[2]');
+          let text = collectLastSpanText(descriptionNode);
+          if (!text) {
+            descriptionNode = evaluateNode(primaryParent, './div/div[3]');
+            text = collectLastSpanText(descriptionNode);
+          }
+          if (text) {
+            description = text;
+          }
+        }
+
+        const secondaryParent = evaluateNode(
+          node,
+          './parent::span/parent::div/parent::div/parent::div/parent::div'
+        );
+        if (secondaryParent) {
+          let descriptionNode = evaluateNode(secondaryParent, './div[3]');
+          let text = normalize(descriptionNode?.textContent ?? '');
+          if (!text) {
+            descriptionNode = evaluateNode(secondaryParent, './div[2]');
+            text = normalize(descriptionNode?.textContent ?? '');
+          }
+          if (text) {
+            description = text;
+          }
+        }
+
+        if (!description) {
+          description = fallbackText;
+        }
+
+        return {
+          link,
+          titol,
+          description: description ?? null,
+        };
+      };
+
+      const ligazons = Array.from(contedor.querySelectorAll('a'));
+      const entradas = ligazons
+        .filter((ligazon) => ligazon.querySelector('h3'))
+        .map((ligazon) => {
+          try {
+            return procesa(ligazon);
+          } catch {
+            return { discardReason: 'erro_avaliacion', link: null, titol: null, href: null };
+          }
+        });
+
+      return { contedor: `div#${contedor.id}`, totalLigazons: ligazons.length, entradas };
+    });
+  } catch (error) {
+    console.warn('extraeResultadosPagina: erro extraendo os resultados da páxina.', error);
+    return { contedor: null, totalLigazons: 0, entradas: [] };
+  }
 }
 
 const GOOGLE_BLOCK_URL_TOKENS = ['/sorry/', '/interstitial/'];
@@ -483,159 +617,3 @@ export async function executaProcuraGoogle(
 
   return results;
 }
-
-/**
- * Procesa un elemento de ligazón para extraer o título, a URL e a descrición.
- * Se se descarta, devolve discardReason + href/titol para diagnóstico.
- */
-async function procesaResultadoLigazon(anchor) {
-  try {
-    return await anchor.evaluate((node) => {
-      const normalize = (text) => {
-        if (!text) {
-          return null;
-        }
-        const cleaned = text.replace(/\s+/g, ' ').trim();
-        return cleaned.length > 0 ? cleaned : null;
-      };
-
-      const discard = (reason, extra = {}) => ({
-        discardReason: reason,
-        link: null,
-        titol: extra.titol ?? null,
-        href: extra.href ?? null,
-        description: extra.description ?? null,
-      });
-
-      const evaluateNode = (context, xpath) => {
-        try {
-          return document
-            .evaluate(xpath, context, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null)
-            .singleNodeValue;
-        } catch {
-          return null;
-        }
-      };
-
-      const rawHref = node.getAttribute('href') ?? null;
-      const h3 = node.querySelector('h3');
-      if (!h3) {
-        return discard('sen_h3', { href: rawHref });
-      }
-
-      const titol = normalize(h3.textContent ?? '');
-
-      let fallbackText = null;
-      let esPregunta = false;
-
-      try {
-        const divPreguntes = evaluateNode(
-          h3,
-          './parent::span/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div/parent::div'
-        );
-        if (divPreguntes) {
-          const divMesPreguntes = evaluateNode(divPreguntes, './div/div[1]/div/div');
-          if (divMesPreguntes) {
-            const mesPreguntes = evaluateNode(divMesPreguntes, './/span');
-            if (mesPreguntes) {
-              const text = mesPreguntes.textContent ?? '';
-              const normalized = text.trim().toLowerCase();
-              fallbackText = normalize(text);
-              if (normalized.includes('preguntes')) {
-                esPregunta = true;
-              }
-            }
-          }
-        }
-      } catch {
-        // Ignóranse erros de detección para continuar o procesamento.
-      }
-
-      if (esPregunta) {
-        return discard('modulo_mais_preguntes', {
-          href: rawHref,
-          titol,
-          description: fallbackText,
-        });
-      }
-
-      const link = rawHref;
-      if (!link) {
-        return discard('sen_href', { titol });
-      }
-
-      if (!titol) {
-        return discard('titulo_baleiro', { href: link });
-      }
-
-      if (/[?¿]\s*$/.test(titol)) {
-        return discard('titulo_pregunta', { href: link, titol });
-      }
-
-      const collectLastSpanText = (element) => {
-        if (!element) {
-          return null;
-        }
-        const snapshot = document.evaluate(
-          './/span',
-          element,
-          null,
-          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-          null
-        );
-        if (!snapshot || snapshot.snapshotLength === 0) {
-          return null;
-        }
-        const target = snapshot.snapshotItem(snapshot.snapshotLength - 1);
-        return normalize(target?.textContent ?? '');
-      };
-
-      let description = null;
-      const primaryParent = evaluateNode(
-        node,
-        './parent::span/parent::div/parent::div/parent::div/parent::div/parent::div'
-      );
-      if (primaryParent) {
-        let descriptionNode = evaluateNode(primaryParent, './div/div[2]');
-        let text = collectLastSpanText(descriptionNode);
-        if (!text) {
-          descriptionNode = evaluateNode(primaryParent, './div/div[3]');
-          text = collectLastSpanText(descriptionNode);
-        }
-        if (text) {
-          description = text;
-        }
-      }
-
-      const secondaryParent = evaluateNode(
-        node,
-        './parent::span/parent::div/parent::div/parent::div/parent::div'
-      );
-      if (secondaryParent) {
-        let descriptionNode = evaluateNode(secondaryParent, './div[3]');
-        let text = normalize(descriptionNode?.textContent ?? '');
-        if (!text) {
-          descriptionNode = evaluateNode(secondaryParent, './div[2]');
-          text = normalize(descriptionNode?.textContent ?? '');
-        }
-        if (text) {
-          description = text;
-        }
-      }
-
-      if (!description) {
-        description = fallbackText;
-      }
-
-      return {
-        link,
-        titol,
-        description: description ?? null,
-      };
-    });
-  } catch (error) {
-    console.error('procuraDatos: erro procesando un resultado.', error);
-    return { discardReason: 'erro_avaliacion', link: null, titol: null, href: null };
-  }
-}
-

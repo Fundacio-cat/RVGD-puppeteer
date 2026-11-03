@@ -106,4 +106,4 @@ A variable `CRON_WAIT=1` obriga o script a esperar a que remate o proceso e así
 
 ## Comprobación da rede antes de instalar un sensor
 
-O directorio [`detecta-rede/`](detecta-rede/) contén un programa para Windows e Linux que comproba se a rede dunha persoa acolledora cumpre os requisitos de conexión do sensor (DHCP, DNS, NTP, webs necesarias e túnel WireGuard co servidor). Consulta o seu [README](detecta-rede/README.md) para compilalo e distribuílo.
+O directorio [`detecta-rede/`](detecta-rede/) contén un programa para Windows, macOS e Linux que comproba se a rede dunha persoa acolledora cumpre os requisitos de conexión do sensor (DHCP, DNS, NTP, webs necesarias e túnel WireGuard co servidor). Consulta o seu [README](detecta-rede/README.md) para compilalo e distribuílo.

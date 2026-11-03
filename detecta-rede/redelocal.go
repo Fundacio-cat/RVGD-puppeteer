@@ -28,12 +28,11 @@ type infoRede struct {
 }
 
 func comprobaRedeLocal(in *informe) *infoRede {
-	in.titulo("Equipo y red local")
+	in.titulo("rede_local")
 
 	ip, err := ipLocal()
 	if err != nil {
-		in.add("Conexión de red", nivelErro, "el equipo no tiene ninguna conexión de red activa",
-			"Conectad el equipo al router y repetid la prueba.")
+		in.add(t("rede.proba_conexion"), nivelErro, t("rede.sen_rede_detalle"), t("rede.sen_rede_accion"))
 		return nil
 	}
 
@@ -53,46 +52,44 @@ func comprobaRedeLocal(in *informe) *infoRede {
 	rede.VPN = pareceVPN(rede.Interface, rede.Descricion)
 	in.Rede = rede
 
-	tipo := "cable"
+	tipo := t("rede.tipo_cable")
 	if rede.WiFi {
-		tipo = "wifi"
+		tipo = t("rede.tipo_wifi")
 		if rede.SSID != "" {
-			tipo += " «" + rede.SSID + "»"
+			tipo = tf("rede.tipo_wifi_ssid", rede.SSID)
 		}
 	}
 	nome := rede.Interface
 	if rede.Descricion != "" {
 		nome += " (" + rede.Descricion + ")"
 	}
-	in.add("Tipo de conexión", nivelInfo, fmt.Sprintf("%s, interfaz %s", tipo, nome), "")
+	in.add(t("rede.proba_tipo"), nivelInfo, tf("rede.tipo_detalle", tipo, nome), "")
 
 	if rede.VPN {
-		in.add("VPN en el equipo", nivelErro, "el tráfico del equipo sale por una VPN ("+nome+")",
-			"Desconectad la VPN del equipo y repetid la prueba: con la VPN, el resultado no corresponde a vuestra red.")
+		in.add(t("rede.proba_vpn"), nivelErro, tf("rede.vpn_detalle", nome), t("rede.vpn_accion"))
 	}
 
 	if ip.IsPrivate() {
 		detalle := ip.String()
 		if rede.Mascara > 0 {
-			detalle = fmt.Sprintf("%s/%d (red de %d direcciones)", ip, rede.Mascara, (1<<(32-rede.Mascara))-2)
+			detalle = tf("rede.ip_detalle", ip.String(), rede.Mascara, (1<<(32-rede.Mascara))-2)
 		}
-		in.add("Dirección local", nivelOK, detalle, "")
+		in.add(t("rede.proba_ip"), nivelOK, detalle, "")
 	} else {
-		in.add("Dirección local", nivelAviso, "el equipo tiene una IP pública ("+ip.String()+"), algo poco habitual detrás de un router doméstico", "")
+		in.add(t("rede.proba_ip"), nivelAviso, tf("rede.ip_publica", ip.String()), "")
 	}
 
 	if rede.PortaEnlace != "" {
-		in.add("Router", nivelInfo, "puerta de enlace "+rede.PortaEnlace, "")
+		in.add(t("rede.proba_router"), nivelInfo, tf("rede.router_detalle", rede.PortaEnlace), "")
 	}
 
 	switch rede.DHCP {
 	case "si":
-		in.add("DHCP", nivelOK, "el router asigna la IP automáticamente", "")
+		in.add(t("rede.proba_dhcp"), nivelOK, t("rede.dhcp_ok"), "")
 	case "no":
-		in.add("DHCP", nivelAviso, "el equipo tiene la IP configurada a mano; no se puede comprobar que el router reparta direcciones",
-			"Comprobad que el DHCP del router está activado.")
+		in.add(t("rede.proba_dhcp"), nivelAviso, t("rede.dhcp_manual_detalle"), t("rede.dhcp_manual_accion"))
 	default:
-		in.add("DHCP", nivelInfo, "no se ha podido determinar si la IP se ha obtenido por DHCP", "")
+		in.add(t("rede.proba_dhcp"), nivelInfo, t("rede.dhcp_sen_datos"), "")
 	}
 	return rede
 }
@@ -215,7 +212,7 @@ func detallesLinux(rede *infoRede) {
 	}
 }
 
-// detallesDarwin só existe para poder probar o programa desde un Mac.
+// detallesDarwin obtén os detalles da conexión en macOS.
 func detallesDarwin(rede *infoRede) {
 	if out, err := executa(5*time.Second, "route", "-n", "get", "default"); err == nil {
 		for _, lina := range strings.Split(out, "\n") {
@@ -230,10 +227,24 @@ func detallesDarwin(rede *infoRede) {
 	if out, err := executa(5*time.Second, "ipconfig", "getpacket", rede.Interface); err == nil && strings.TrimSpace(out) != "" {
 		rede.DHCP = "si"
 	}
-	if out, err := executa(5*time.Second, "networksetup", "-getairportnetwork", rede.Interface); err == nil {
-		if _, ssid, ok := strings.Cut(out, ": "); ok {
-			rede.WiFi = true
-			rede.SSID = strings.TrimSpace(ssid)
+	// Desde macOS 14.4, networksetup di que non hai wifi aínda que a haxa, e o SSID
+	// aparece como "<redacted>" sen permiso de localización. ipconfig getsummary
+	// segue indicando o tipo de interface; o SSID só se garda se é visible.
+	if out, err := executa(5*time.Second, "ipconfig", "getsummary", rede.Interface); err == nil {
+		for _, lina := range strings.Split(out, "\n") {
+			k, v, ok := strings.Cut(strings.TrimSpace(lina), " : ")
+			if !ok {
+				continue
+			}
+			v = strings.TrimSpace(v)
+			switch k {
+			case "InterfaceType":
+				rede.WiFi = strings.EqualFold(v, "WiFi")
+			case "SSID":
+				if v != "" && !strings.Contains(v, "redacted") {
+					rede.SSID = v
+				}
+			}
 		}
 	}
 }

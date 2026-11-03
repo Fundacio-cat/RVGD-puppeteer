@@ -6,13 +6,14 @@
 // probas. A configuración do túnel (conf/test.conf) incrústase no executable ao
 // compilalo, de xeito que a persoa acolledora só recibe un ficheiro.
 //
-// As mensaxes que ve o usuario están en castelán, como o documento de requisitos.
-// Na consola só se amosa o progreso; o detalle técnico vai ao informe.
+// Os textos que ve o usuario están en textos.json (ver textos.go). Na consola só
+// se amosa o progreso; o detalle técnico vai ao informe.
 package main
 
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -28,8 +29,6 @@ const version = "0.2.0"
 
 // Endpoint por defecto, para a proba de DNS se non se pode ler a configuración.
 const endpointPorDefecto = "profesor.galego.lacuinadel.cat"
-
-const tituloXanela = "Comprobación de red - Sensor RVGD"
 
 // conf/ contén un LEME.md (no repositorio) e test.conf (só en local, no .gitignore).
 //
@@ -72,32 +71,27 @@ type informe struct {
 	seccionAberta bool
 }
 
-// Nomes das seccións tal como os ve a persoa acolledora na consola.
-var seccionsConsola = []struct{ interna, visible string }{
-	{"Equipo y red local", "Conexión del ordenador"},
-	{"Acceso a Internet", "Acceso a Internet"},
-	{"DNS", "Nombres de dominio (DNS)"},
-	{"Hora (NTP)", "Servidor de hora"},
-	{"Webs necesarias", "Webs necesarias"},
-	{"Ruta de red", "Router"},
-	{"Túnel con el servidor", "Conexión con puntoGAL (1-2 min)"},
+// Seccións da proba, na orde en que se fan: o seu título no informe e o nome
+// que ve a persoa acolledora na consola.
+var seccions = map[string]struct{ informe, consola string }{
+	"rede_local": {"seccion.rede_local.informe", "seccion.rede_local.consola"},
+	"internet":   {"seccion.internet.informe", "seccion.internet.consola"},
+	"dns":        {"seccion.dns.informe", "seccion.dns.consola"},
+	"ntp":        {"seccion.ntp.informe", "seccion.ntp.consola"},
+	"webs":       {"seccion.webs.informe", "seccion.webs.consola"},
+	"ruta":       {"seccion.ruta.informe", "seccion.ruta.consola"},
+	"tunel":      {"seccion.tunel.informe", "seccion.tunel.consola"},
 }
 
-func (in *informe) titulo(s string) {
+func (in *informe) titulo(id string) {
 	in.pechaSeccion()
-	in.seccion = s
+	s := seccions[id]
+	in.seccion = t(s.informe)
 	in.numSeccion++
 	in.peorSeccion = nivelOK
 	in.seccionAberta = true
-	fmt.Fprintf(in.out, "\n== %s ==\n", s)
-
-	visible := s
-	for _, sc := range seccionsConsola {
-		if sc.interna == s {
-			visible = sc.visible
-		}
-	}
-	fmt.Fprintf(in.consola, "  %d/%d  %-40s", in.numSeccion, len(seccionsConsola), visible+"...")
+	fmt.Fprintf(in.out, "\n== %s ==\n", in.seccion)
+	fmt.Fprintf(in.consola, "  %d/%d  %-40s", in.numSeccion, len(seccions), t(s.consola)+"...")
 }
 
 func (in *informe) pechaSeccion() {
@@ -105,12 +99,12 @@ func (in *informe) pechaSeccion() {
 		return
 	}
 	in.seccionAberta = false
-	estado := "Correcto"
+	estado := t("consola.estado_ok")
 	switch in.peorSeccion {
 	case nivelAviso:
-		estado = "Revisar"
+		estado = t("consola.estado_aviso")
 	case nivelErro:
-		estado = "Problema"
+		estado = t("consola.estado_erro")
 	}
 	fmt.Fprintln(in.consola, estado)
 }
@@ -166,26 +160,27 @@ func main() {
 		in.consola = io.Discard
 	}
 
-	fmt.Fprintf(&copia, "Comprobación de red para sensores RVGD (v%s)\nFecha: %s\n", version, in.Fecha.Format("2006-01-02 15:04:05"))
+	fmt.Fprintln(&copia, tf("informe.cabeceira", version))
+	fmt.Fprintln(&copia, tf("informe.data", in.Fecha.Format("2006-01-02 15:04:05")))
+	cabeceira := t("consola.cabeceira")
 	fmt.Println()
-	fmt.Println("  COMPROBACIÓN DE RED PARA EL SENSOR")
-	fmt.Println("  ==================================")
+	fmt.Println("  " + cabeceira)
+	fmt.Println("  " + strings.Repeat("=", len([]rune(cabeceira))))
 	fmt.Println()
-	fmt.Println("  Se está comprobando si esta red es válida para el sensor.")
-	fmt.Println("  Tarda unos 3 minutos. No cerréis esta ventana.")
+	fmt.Println("  " + t("consola.intro1"))
+	fmt.Println("  " + t("consola.intro2"))
 	fmt.Println()
 
 	rede := comprobaRedeLocal(in)
 	if rede != nil && rede.WiFi && !*nonInteractivo {
-		pregunta := "¿Estáis conectados a la wifi principal de vuestro router?\n\n(Si es la wifi de invitados, responded «No».)"
+		pregunta := t("wifi.pregunta")
 		if rede.SSID != "" {
-			pregunta = "Este ordenador está conectado a la wifi «" + rede.SSID + "».\n\n" + pregunta
+			pregunta = tf("wifi.pregunta_ssid", rede.SSID) + "\n\n" + pregunta
 		}
-		if preguntaSiNon(tituloXanela, pregunta) {
-			in.add("Wifi principal", nivelOK, "confirmado por el usuario", "")
+		if preguntaSiNon(t("xanela.titulo"), pregunta) {
+			in.add(t("wifi.proba"), nivelOK, t("wifi.ok"), "")
 		} else {
-			in.add("Wifi principal", nivelErro, "el ordenador no está conectado a la wifi principal del router",
-				"Conectad el ordenador a la wifi principal del router (o por cable) y volved a abrir este programa.")
+			in.add(t("wifi.proba"), nivelErro, t("wifi.erro_detalle"), t("wifi.erro_accion"))
 		}
 	}
 
@@ -208,24 +203,24 @@ func main() {
 	in.pechaSeccion()
 
 	erros, avisos := in.conta(nivelErro), in.conta(nivelAviso)
-	titular, global := "LA RED ES VÁLIDA", nivelOK
+	titular, global := t("veredicto.titular_ok"), nivelOK
 	switch {
 	case erros > 0:
-		titular, global = "LA RED NO ES VÁLIDA", nivelErro
-		in.Veredicto = "NO APTA: hay problemas que impedirán que el sensor se conecte."
+		titular, global = t("veredicto.titular_erro"), nivelErro
+		in.Veredicto = t("veredicto.informe_erro")
 	case avisos > 0:
-		titular, global = "LA RED ES VÁLIDA (CON AVISOS)", nivelAviso
-		in.Veredicto = "APTA CON AVISOS: el sensor debería poder conectarse, pero hay puntos a revisar."
+		titular, global = t("veredicto.titular_aviso"), nivelAviso
+		in.Veredicto = t("veredicto.informe_aviso")
 	default:
-		in.Veredicto = "APTA: la red cumple los requisitos para el sensor."
+		in.Veredicto = t("veredicto.informe_ok")
 	}
-	fmt.Fprintf(&copia, "\n== Resultado ==\n  %s\n  (%d errores, %d avisos)\n", in.Veredicto, erros, avisos)
+	fmt.Fprintf(&copia, "\n== %s ==\n  %s\n  %s\n", t("informe.resultado"), in.Veredicto, tf("informe.resumo", erros, avisos))
 
-	fmt.Printf("\n  RESULTADO: %s\n", titular)
+	fmt.Printf("\n  %s\n", tf("consola.resultado", titular))
 	rutaInforme := gardaInforme(in, copia.String(), dir)
 
 	if !*nonInteractivo {
-		amosaResultado(tituloXanela, textoResultado(in, titular, global, rutaInforme), global)
+		amosaResultado(t("xanela.titulo"), textoResultado(in, titular, global, rutaInforme), global)
 		if rutaInforme != "" {
 			abreCartafol(rutaInforme)
 		}
@@ -245,15 +240,14 @@ func cargaConfiguracion(ruta, dir string) (*configWG, string, error) {
 	}
 	if data, err := confIncrustada.ReadFile("conf/test.conf"); err == nil {
 		cfg, err := parseConfigWG(data)
-		return cfg, "configuración incluida en el programa", err
+		return cfg, t("conf.incluida"), err
 	}
 	junto := filepath.Join(dir, "test.conf")
 	if _, err := os.Stat(junto); err == nil {
 		cfg, err := cargaConfigWG(junto)
 		return cfg, junto, err
 	}
-	return nil, "configuración incluida en el programa",
-		fmt.Errorf("el programa se ha generado sin el fichero conf/test.conf")
+	return nil, t("conf.incluida"), errors.New(t("conf.sen_ficheiro"))
 }
 
 // textoResultado prepara a mensaxe da xanela final en linguaxe sinxela:
@@ -264,11 +258,11 @@ func textoResultado(in *informe, titular string, global nivel, rutaInforme strin
 
 	switch global {
 	case nivelOK:
-		b.WriteString("Esta red cumple todos los requisitos. Podéis conectar el sensor al router.")
+		b.WriteString(t("veredicto.xanela_ok"))
 	case nivelAviso:
-		b.WriteString("El sensor debería funcionar con esta red, pero conviene revisar:")
+		b.WriteString(t("veredicto.xanela_aviso"))
 	case nivelErro:
-		b.WriteString("El sensor no podrá conectarse con esta red. Hay que resolver:")
+		b.WriteString(t("veredicto.xanela_erro"))
 	}
 
 	const maximo = 6
@@ -290,18 +284,18 @@ func textoResultado(in *informe, titular string, global nivel, rutaInforme strin
 		}
 	}
 	if amosados > maximo {
-		fmt.Fprintf(&b, "\n\n(y %d puntos más en el informe)", amosados-maximo)
+		b.WriteString("\n\n" + tf("xanela.mais_puntos", amosados-maximo))
 	}
 
 	if rutaInforme != "" {
-		fmt.Fprintf(&b, "\n\nSe ha guardado un informe en el fichero «%s». Enviadlo a puntoGAL.", filepath.Base(rutaInforme))
-		if runtime.GOOS == "windows" {
-			b.WriteString("\n\nAl pulsar Aceptar se abrirá la carpeta donde está.")
+		b.WriteString("\n\n" + tf("xanela.informe_gardado", filepath.Base(rutaInforme)))
+		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+			b.WriteString("\n\n" + t("xanela.abrir_cartafol"))
 		} else {
 			b.WriteString("\n\n" + rutaInforme)
 		}
 	} else {
-		b.WriteString("\n\nNo se ha podido guardar el informe: haced una foto o captura de esta ventana y enviadla a puntoGAL.")
+		b.WriteString("\n\n" + t("xanela.sen_informe"))
 	}
 	return b.String()
 }
@@ -316,7 +310,7 @@ func directorioPrograma() string {
 
 // gardaInforme garda o informe en texto e JSON e devolve a ruta do .txt ("" se non foi posible).
 func gardaInforme(in *informe, texto, dir string) string {
-	base := "informe-red-" + in.Fecha.Format("20060102-150405")
+	base := t("informe.nome_ficheiro") + "-" + in.Fecha.Format("20060102-150405")
 	jsonData, _ := json.MarshalIndent(in, "", "  ")
 
 	directorios := []string{dir, "."}
@@ -332,7 +326,7 @@ func gardaInforme(in *informe, texto, dir string) string {
 		if abs, err := filepath.Abs(txt); err == nil {
 			txt = abs
 		}
-		fmt.Printf("\n  Informe guardado en: %s\n", txt)
+		fmt.Printf("\n  %s\n", tf("consola.informe_gardado", txt))
 		return txt
 	}
 	return ""

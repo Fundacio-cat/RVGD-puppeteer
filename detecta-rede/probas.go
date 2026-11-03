@@ -31,26 +31,24 @@ func clienteHTTP(timeout time.Duration) *http.Client {
 // --- Acceso a Internet e portal cativo ---
 
 func comprobaInternet(in *informe) {
-	in.titulo("Acceso a Internet")
+	in.titulo("internet")
 
 	resp, err := clienteHTTP(10 * time.Second).Get("http://connectivitycheck.gstatic.com/generate_204")
 	if err != nil {
-		in.add("Conexión a Internet", nivelErro, fmt.Sprintf("no hay acceso a Internet (%v)", err),
-			"Comprobad con otro dispositivo que el router tiene Internet.")
+		in.add(t("internet.proba"), nivelErro, tf("internet.sen_internet_detalle", err), t("internet.sen_internet_accion"))
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNoContent {
-		in.add("Conexión a Internet", nivelOK, "acceso directo, sin página de inicio de sesión", "")
+		in.add(t("internet.proba"), nivelOK, t("internet.ok"), "")
 		return
 	}
-	detalle := fmt.Sprintf("la red responde con otra página (código %d", resp.StatusCode)
+	detalle := tf("internet.portal_detalle", resp.StatusCode)
 	if loc := resp.Header.Get("Location"); loc != "" {
-		detalle += ", redirige a " + loc
+		detalle = tf("internet.portal_detalle_redirixe", resp.StatusCode, loc)
 	}
-	in.add("Conexión a Internet", nivelErro, detalle+"): probablemente hay un portal de inicio de sesión",
-		"El sensor no puede iniciar sesión en portales: hace falta una red sin página de acceso.")
+	in.add(t("internet.proba"), nivelErro, detalle, t("internet.portal_accion"))
 }
 
 // --- DNS ---
@@ -104,48 +102,42 @@ func comparten(a, b []netip.Addr) bool {
 }
 
 func comprobaDNS(in *informe, host string) {
-	in.titulo("DNS")
+	in.titulo("dns")
 
 	ipsServidor, err := resolve4(net.DefaultResolver, host)
 	if err != nil {
-		in.add("Servidor de puntoGAL", nivelErro, fmt.Sprintf("no se puede resolver %s con el DNS del router", host),
-			"Revisad que no haya filtros de DNS en el router o del operador.")
+		in.add(t("dns.proba_servidor"), nivelErro, tf("dns.servidor_erro", host), t("dns.revisar_filtros"))
 	} else {
-		in.add("Servidor de puntoGAL", nivelOK, fmt.Sprintf("%s → %s", host, textoIPs(ipsServidor)), "")
+		in.add(t("dns.proba_servidor"), nivelOK, fmt.Sprintf("%s → %s", host, textoIPs(ipsServidor)), "")
 	}
 
 	if ips, err := resolve4(net.DefaultResolver, "www.google.com"); err != nil {
-		in.add("Google", nivelErro, "no se puede resolver www.google.com con el DNS del router",
-			"Revisad que no haya filtros de DNS en el router o del operador.")
+		in.add(t("dns.proba_google"), nivelErro, t("dns.google_erro"), t("dns.revisar_filtros"))
 	} else if ipsBloqueadas(ips) {
-		in.add("Google", nivelErro, fmt.Sprintf("www.google.com se resuelve a una dirección bloqueada (%s): hay un filtro de contenido", textoIPs(ips)),
-			"Desactivad los filtros de contenido o el control parental del router o del operador.")
+		in.add(t("dns.proba_google"), nivelErro, tf("dns.google_bloqueado_detalle", textoIPs(ips)), t("dns.google_bloqueado_accion"))
 	} else {
-		in.add("Google", nivelOK, "www.google.com se resuelve correctamente", "")
+		in.add(t("dns.proba_google"), nivelOK, t("dns.google_ok"), "")
 	}
 
 	inexistente := fmt.Sprintf("rvgd-%08x.example.com", rand.Uint32())
 	if ips, err := resolve4(net.DefaultResolver, inexistente); err == nil && len(ips) > 0 {
-		in.add("Dominios inexistentes", nivelAviso, fmt.Sprintf("el DNS responde a dominios que no existen (%s): el operador redirige las consultas", textoIPs(ips)),
-			"Suele ser un servicio del operador («protección», «sugerencias»…); conviene desactivarlo.")
+		in.add(t("dns.proba_inexistentes"), nivelAviso, tf("dns.inexistentes_detalle", textoIPs(ips)), t("dns.inexistentes_accion"))
 	} else {
-		in.add("Dominios inexistentes", nivelOK, "se tratan correctamente", "")
+		in.add(t("dns.proba_inexistentes"), nivelOK, t("dns.inexistentes_ok"), "")
 	}
 
 	// O sensor usa o DNS que lle dá o router, pero o documento de requisitos
 	// pide que tamén se poidan facer consultas DNS externas.
 	for _, proto := range []string{"udp", "tcp"} {
-		proba := "DNS externo " + strings.ToUpper(proto) + " 53"
+		proba := tf("dns.proba_externo", strings.ToUpper(proto))
 		ips, err := resolve4(resolverPara("8.8.8.8:53", proto), host)
 		switch {
 		case err != nil:
-			in.add(proba, nivelAviso, fmt.Sprintf("el router no deja consultar servidores DNS externos por %s 53", strings.ToUpper(proto)),
-				"No es imprescindible (el sensor usa el DNS del router), pero el documento de requisitos pide permitirlo.")
+			in.add(proba, nivelAviso, tf("dns.externo_erro_detalle", strings.ToUpper(proto)), t("dns.externo_erro_accion"))
 		case proto == "udp" && len(ipsServidor) > 0 && !comparten(ips, ipsServidor):
-			in.add(proba, nivelAviso, fmt.Sprintf("el DNS del router da otra dirección para %s (%s) que un DNS público (%s)", host, textoIPs(ipsServidor), textoIPs(ips)),
-				"Puede haber un filtro o una redirección de DNS en el router o del operador.")
+			in.add(proba, nivelAviso, tf("dns.externo_distinto_detalle", host, textoIPs(ipsServidor), textoIPs(ips)), t("dns.externo_distinto_accion"))
 		default:
-			in.add(proba, nivelOK, "funciona", "")
+			in.add(proba, nivelOK, t("dns.externo_ok"), "")
 		}
 	}
 }
@@ -173,7 +165,7 @@ func sntp(servidor string) (time.Duration, error) {
 		return 0, err
 	}
 	if n < 48 {
-		return 0, fmt.Errorf("respuesta NTP incompleta")
+		return 0, errors.New(t("ntp.resposta_incompleta"))
 	}
 
 	const epocaNTP = 2208988800 // segundos entre 1900 e 1970
@@ -184,7 +176,7 @@ func sntp(servidor string) (time.Duration, error) {
 }
 
 func comprobaNTP(in *informe) {
-	in.titulo("Hora (NTP)")
+	in.titulo("ntp")
 
 	var ultimo error
 	for _, s := range []string{"pool.ntp.org", "debian.pool.ntp.org", "time.google.com"} {
@@ -193,11 +185,10 @@ func comprobaNTP(in *informe) {
 			ultimo = err
 			continue
 		}
-		in.add("Servidor de hora", nivelOK, fmt.Sprintf("respuesta de %s (el reloj de este equipo difiere %s)", s, desfase.Round(time.Millisecond)), "")
+		in.add(t("ntp.proba"), nivelOK, tf("ntp.ok", s, desfase.Round(time.Millisecond)), "")
 		return
 	}
-	in.add("Servidor de hora", nivelErro, fmt.Sprintf("no responde ningún servidor de hora por UDP 123 (%v)", ultimo),
-		"Permitid la salida UDP 123 en el router. Sin hora, el sensor no puede conectarse.")
+	in.add(t("ntp.proba"), nivelErro, tf("ntp.erro_detalle", ultimo), t("ntp.erro_accion"))
 }
 
 // --- Webs necesarias ---
@@ -205,24 +196,24 @@ func comprobaNTP(in *informe) {
 type web struct {
 	url     string
 	critica bool
-	uso     string
+	uso     string // id do texto que explica para que se usa
 }
 
 var webs = []web{
-	{"https://www.google.com/", true, "búsquedas"},
-	{"https://github.com/", true, "actualizaciones del sensor"},
-	{"https://raw.githubusercontent.com/", false, "instalación"},
-	{"https://nodejs.org/", false, "instalación"},
-	{"https://archive.raspberrypi.com/", false, "actualizaciones del sistema"},
-	{"https://deb.debian.org/", false, "actualizaciones del sistema"},
-	{"https://repo.zabbix.com/", false, "monitorización"},
-	{"https://deb.nodesource.com/", false, "instalación"},
-	{"http://deb.debian.org/", false, "actualizaciones del sistema por HTTP"},
-	{"http://archive.raspberrypi.com/", false, "actualizaciones del sistema por HTTP"},
+	{"https://www.google.com/", true, "webs.uso_procuras"},
+	{"https://github.com/", true, "webs.uso_actualizacions_sensor"},
+	{"https://raw.githubusercontent.com/", false, "webs.uso_instalacion"},
+	{"https://nodejs.org/", false, "webs.uso_instalacion"},
+	{"https://archive.raspberrypi.com/", false, "webs.uso_actualizacions_sistema"},
+	{"https://deb.debian.org/", false, "webs.uso_actualizacions_sistema"},
+	{"https://repo.zabbix.com/", false, "webs.uso_monitorizacion"},
+	{"https://deb.nodesource.com/", false, "webs.uso_instalacion"},
+	{"http://deb.debian.org/", false, "webs.uso_actualizacions_http"},
+	{"http://archive.raspberrypi.com/", false, "webs.uso_actualizacions_http"},
 }
 
 func comprobaWebs(in *informe) {
-	in.titulo("Webs necesarias")
+	in.titulo("webs")
 
 	cliente := clienteHTTP(15 * time.Second)
 	errs := make([]error, len(webs))
@@ -245,7 +236,7 @@ func comprobaWebs(in *informe) {
 	for i, w := range webs {
 		proba := strings.TrimSuffix(w.url, "/")
 		if errs[i] == nil {
-			in.add(proba, nivelOK, "accesible ("+w.uso+")", "")
+			in.add(proba, nivelOK, tf("webs.ok", t(w.uso)), "")
 			continue
 		}
 		n := nivelAviso
@@ -254,16 +245,14 @@ func comprobaWebs(in *informe) {
 		}
 		var errCert *tls.CertificateVerificationError
 		if errors.As(errs[i], &errCert) {
-			in.add(proba, n, "certificado no válido: algún filtro (del router, del operador o un antivirus de red) está interceptando las conexiones seguras",
-				"Desactivad los filtros de contenido o de seguridad del router o del operador.")
+			in.add(proba, n, t("webs.certificado_detalle"), t("webs.certificado_accion"))
 			continue
 		}
 		porto := "443"
 		if strings.HasPrefix(w.url, "http://") {
 			porto = "80"
 		}
-		in.add(proba, n, fmt.Sprintf("no accesible (%v)", errs[i]),
-			fmt.Sprintf("Permitid el acceso a esta web desde el router (TCP %s). Se usa para: %s.", porto, w.uso))
+		in.add(proba, n, tf("webs.erro_detalle", errs[i]), tf("webs.erro_accion", porto, t(w.uso)))
 	}
 }
 
@@ -290,7 +279,7 @@ func traceroute() (map[int]netip.Addr, error) {
 		nome, args = "traceroute", []string{"-n", "-m", "3", "-w", "1", "8.8.8.8"}
 	}
 	if _, err := exec.LookPath(nome); err != nil {
-		return nil, fmt.Errorf("%s no está disponible", nome)
+		return nil, errors.New(tf("ruta.sen_ferramenta", nome))
 	}
 
 	out, _ := executa(60*time.Second, nome, args...)
@@ -314,15 +303,15 @@ func traceroute() (map[int]netip.Addr, error) {
 }
 
 func comprobaRuta(in *informe) {
-	in.titulo("Ruta de red")
+	in.titulo("ruta")
 
 	saltos, err := traceroute()
 	if err != nil || len(saltos) == 0 {
-		motivo := "sin respuesta"
+		motivo := t("ruta.sen_resposta")
 		if err != nil {
 			motivo = err.Error()
 		}
-		in.add("Routers intermedios", nivelInfo, "no se ha podido comprobar la ruta ("+motivo+")", "")
+		in.add(t("ruta.proba"), nivelInfo, tf("ruta.non_comprobada", motivo), "")
 		return
 	}
 
@@ -340,7 +329,7 @@ func comprobaRuta(in *informe) {
 	cgnat := netip.MustParsePrefix("100.64.0.0/10")
 	for _, ip := range saltos {
 		if cgnat.Contains(ip) {
-			in.add("CGNAT", nivelInfo, "el operador usa CGNAT (dirección pública compartida); el túnel funciona igualmente", "")
+			in.add(t("ruta.proba_cgnat"), nivelInfo, t("ruta.cgnat_detalle"), "")
 			break
 		}
 	}
@@ -351,9 +340,8 @@ func comprobaRuta(in *informe) {
 	s1, ok1 := saltos[1]
 	s2, ok2 := saltos[2]
 	if ok1 && ok2 && s1.IsPrivate() && domestica.Contains(s2) {
-		in.add("Routers intermedios", nivelAviso, "parece que hay dos routers encadenados ("+ruta+")",
-			"Conectad el sensor al mismo aparato que da la red a este equipo, o repetid la prueba con el equipo conectado por cable donde irá el sensor.")
+		in.add(t("ruta.proba"), nivelAviso, tf("ruta.dobre_detalle", ruta), t("ruta.dobre_accion"))
 		return
 	}
-	in.add("Routers intermedios", nivelOK, "ruta directa ("+ruta+")", "")
+	in.add(t("ruta.proba"), nivelOK, tf("ruta.ok", ruta), "")
 }

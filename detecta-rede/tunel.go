@@ -265,34 +265,32 @@ func sondaPostgres(tnet *netstack.Net, enderezo string) (bool, error) {
 }
 
 func comprobaTunel(in *informe, cfg *configWG, errConf error, orixe, servidor, bd string, duracion time.Duration, wifi bool) {
-	in.titulo("Túnel con el servidor")
+	in.titulo("tunel")
 
 	if errConf != nil {
-		in.add("Configuración", nivelErro, fmt.Sprintf("no se ha podido leer la configuración del túnel (%s: %v)", orixe, errConf),
-			"Avisad a puntoGAL: este programa no es válido y hay que generar uno nuevo.")
+		in.add(t("tunel.proba_configuracion"), nivelErro, tf("tunel.configuracion_erro_detalle", orixe, errConf), t("tunel.configuracion_erro_accion"))
 		return
 	}
 
 	host, porto, err := separaEndpoint(cfg.Endpoint)
 	if err != nil {
-		in.add("Configuración", nivelErro, "el Endpoint de test.conf no es válido ("+cfg.Endpoint+")", "")
+		in.add(t("tunel.proba_configuracion"), nivelErro, tf("tunel.endpoint_non_valido", cfg.Endpoint), "")
 		return
 	}
 	ips, err := resolve4(net.DefaultResolver, host)
 	if err != nil || len(ips) == 0 {
-		in.add("Conexión con el servidor", nivelErro, "no se puede resolver "+host,
-			"Revisad que no haya filtros de DNS en el router o del operador.")
+		in.add(t("tunel.proba_conexion"), nivelErro, tf("tunel.non_resolve", host), t("dns.revisar_filtros"))
 		return
 	}
 	srv, err := netip.ParseAddr(servidor)
 	if err != nil {
-		in.add("Configuración", nivelErro, "la IP del servidor no es válida ("+servidor+")", "")
+		in.add(t("tunel.proba_configuracion"), nivelErro, tf("tunel.ip_non_valida", servidor), "")
 		return
 	}
 
 	dev, tnet, err := arrincaTunel(cfg, netip.AddrPortFrom(ips[0], porto))
 	if err != nil {
-		in.add("Conexión con el servidor", nivelErro, fmt.Sprintf("no se ha podido iniciar el túnel en este equipo (%v)", err), "")
+		in.add(t("tunel.proba_conexion"), nivelErro, tf("tunel.non_arrinca", err), "")
 		return
 	}
 	defer dev.Close()
@@ -303,19 +301,16 @@ func comprobaTunel(in *informe, cfg *configWG, errConf error, orixe, servidor, b
 		pingTunel(tnet, srv, 8, 2*time.Second)
 	}
 	if !handshakeFeito(dev) {
-		in.add("Conexión con el servidor", nivelErro,
-			fmt.Sprintf("el servidor no responde: el router bloquea la salida UDP %d o el servidor no está disponible", porto),
-			fmt.Sprintf("Permitid la salida UDP %d en el router. Si ya está permitida, avisad a puntoGAL.", porto))
+		in.add(t("tunel.proba_conexion"), nivelErro, tf("tunel.sen_resposta_detalle", porto), tf("tunel.sen_resposta_accion", porto))
 		return
 	}
-	in.add("Conexión con el servidor", nivelOK, fmt.Sprintf("túnel establecido con %s (UDP %d)", host, porto), "")
+	in.add(t("tunel.proba_conexion"), nivelOK, tf("tunel.ok", host, porto), "")
 
 	latencia, err := pingTunel(tnet, srv, 56, 3*time.Second)
 	if err != nil {
-		in.add("Respuesta del servidor", nivelAviso, fmt.Sprintf("el túnel está establecido pero %s no responde al ping (%v)", srv, err),
-			"Revisar la configuración del servidor (no depende de vuestra red).")
+		in.add(t("tunel.proba_resposta"), nivelAviso, tf("tunel.ping_erro_detalle", srv, err), t("tunel.revisar_servidor"))
 	} else {
-		in.add("Respuesta del servidor", nivelOK, fmt.Sprintf("%s responde en %s", srv, latencia.Round(time.Millisecond)), "")
+		in.add(t("tunel.proba_resposta"), nivelOK, tf("tunel.ping_ok", srv, latencia.Round(time.Millisecond)), "")
 	}
 
 	comprobaBD(in, tnet, srv, bd)
@@ -334,30 +329,28 @@ func comprobaBD(in *informe, tnet *netstack.Net, srv netip.Addr, bd string) {
 		bd = netip.AddrPortFrom(srv, portoBD).String()
 	}
 	if ePostgres, err := sondaPostgres(tnet, bd); err == nil && ePostgres {
-		in.add("Base de datos", nivelOK, "responde en "+bd, "")
+		in.add(t("tunel.proba_bd"), nivelOK, tf("tunel.bd_ok", bd), "")
 		return
 	}
-	in.add("Base de datos", nivelAviso, "el túnel funciona pero no se llega a la base de datos ("+bd+")",
-		"Revisar la configuración del servidor para el cliente de pruebas (no depende de vuestra red).")
+	in.add(t("tunel.proba_bd"), nivelAviso, tf("tunel.bd_erro_detalle", bd), t("tunel.bd_erro_accion"))
 }
 
 func comprobaMTU(in *informe, tnet *netstack.Net, srv netip.Addr, mtu int) {
 	tamano := mtu - 28 // cabeceiras IPv4 (20) + ICMP (8)
 	for intento := 0; intento < 2; intento++ {
 		if _, err := pingTunel(tnet, srv, tamano, 3*time.Second); err == nil {
-			in.add("Paquetes grandes (MTU)", nivelOK, fmt.Sprintf("pasan paquetes de %d bytes sin problemas", mtu), "")
+			in.add(t("tunel.proba_mtu"), nivelOK, tf("tunel.mtu_ok", mtu), "")
 			return
 		}
 	}
-	in.add("Paquetes grandes (MTU)", nivelAviso, fmt.Sprintf("los paquetes de %d bytes no pasan por el túnel: la conexión admite paquetes más pequeños de lo habitual", mtu),
-		"Indicad a puntoGAL el operador y el tipo de conexión (fibra, ADSL, 4G…).")
+	in.add(t("tunel.proba_mtu"), nivelAviso, tf("tunel.mtu_erro_detalle", mtu), t("tunel.mtu_erro_accion"))
 }
 
 func comprobaEstabilidade(in *informe, tnet *netstack.Net, srv netip.Addr, duracion time.Duration, wifi bool) {
 	if duracion <= 0 {
 		return
 	}
-	fmt.Fprintf(in.out, "  Midiendo la estabilidad de la conexión durante %s...\n", duracion)
+	fmt.Fprintf(in.out, "  %s\n", tf("tunel.medindo_estabilidade", duracion))
 
 	var enviados, perdidos int
 	var total, maxima time.Duration
@@ -380,9 +373,9 @@ func comprobaEstabilidade(in *informe, tnet *netstack.Net, srv netip.Addr, durac
 
 	recibidos := enviados - perdidos
 	perdida := 100 * float64(perdidos) / float64(enviados)
-	detalle := fmt.Sprintf("%d de %d paquetes perdidos (%.1f %%)", perdidos, enviados, perdida)
+	detalle := tf("tunel.estabilidade_detalle", perdidos, enviados, perdida)
 	if recibidos > 0 {
-		detalle += fmt.Sprintf(", latencia media %s, máxima %s",
+		detalle += tf("tunel.estabilidade_latencia",
 			(total / time.Duration(recibidos)).Round(time.Millisecond), maxima.Round(time.Millisecond))
 	}
 
@@ -393,14 +386,14 @@ func comprobaEstabilidade(in *informe, tnet *netstack.Net, srv netip.Addr, durac
 	}
 	accion := ""
 	if wifi {
-		accion = "Parte de la pérdida puede deberse a la wifi; el sensor irá por cable."
+		accion = t("tunel.estabilidade_wifi")
 	}
 	switch {
 	case perdida > 20:
-		in.add("Estabilidad", nivelErro, detalle, "La conexión es muy inestable. "+accion)
+		in.add(t("tunel.proba_estabilidade"), nivelErro, detalle, strings.TrimSpace(t("tunel.estabilidade_inestable")+" "+accion))
 	case perdida > limiar:
-		in.add("Estabilidad", nivelAviso, detalle, accion)
+		in.add(t("tunel.proba_estabilidade"), nivelAviso, detalle, accion)
 	default:
-		in.add("Estabilidad", nivelOK, detalle, "")
+		in.add(t("tunel.proba_estabilidade"), nivelOK, detalle, "")
 	}
 }
