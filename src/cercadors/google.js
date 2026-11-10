@@ -226,13 +226,14 @@ async function resolveResultUrl(rawLink, { cookieHeader = '' } = {}) {
  * Recorre as ligazóns visibles e constrúe resultados con título, URL e descrición.
  * Para continuar desde unha páxina anterior: `seenUrls` comparte as URL xa gardadas
  * (para non repetilas) e `posicionInicial` é o número de resultados xa gardados, para
- * que as posicións sigan a numeración.
+ * que as posicións sigan a numeración. En `paxinacion.seguinte` déixase a URL da
+ * ligazón «Seguinte» da páxina, se a hai.
  */
 export async function procuraDatos(
   page,
   maxResults,
   timeoutMs,
-  { onResult, seenUrls = new Set(), posicionInicial = 0 } = {}
+  { onResult, seenUrls = new Set(), posicionInicial = 0, paxinacion = {} } = {}
 ) {
   // Con módulos coma "Escolma xerada por IA" ou "Máis preguntas", Google pinta antes
   // o contedor baleiro que o seu contido; agardar só pola existencia de div#search
@@ -270,7 +271,8 @@ export async function procuraDatos(
   await performHumanScroll(page);
 
   const results = [];
-  const { contedor, totalLigazons, entradas } = await extraeResultadosPagina(page);
+  const { contedor, totalLigazons, entradas, seguinte } = await extraeResultadosPagina(page);
+  paxinacion.seguinte = seguinte ?? null;
   if (contedor) {
     console.log(
       `procuraDatos: usando contedor "${contedor}" (${totalLigazons} ligazóns, ${entradas.length} con título).`
@@ -527,7 +529,11 @@ async function extraeResultadosPagina(page) {
           }
         });
 
-      return { contedor: `div#${contedor.id}`, totalLigazons: ligazons.length, entradas };
+      // A ligazón á páxina seguinte lese agora, mentres o navegador responde, para non
+      // ter que pedila despois nunha orde nova.
+      const seguinte = document.querySelector('a#pnnext')?.href ?? null;
+
+      return { contedor: `div#${contedor.id}`, totalLigazons: ligazons.length, entradas, seguinte };
     });
   } catch (error) {
     console.warn('extraeResultadosPagina: erro extraendo os resultados da páxina.', error);
@@ -602,20 +608,57 @@ async function assertNonBloqueadoPorGoogle(page, content = null) {
 // Número máximo de páxinas de resultados que se percorren para chegar a maxResults.
 const MAX_PAXINAS_GOOGLE = 3;
 
+// Tempo máximo para que Chromium responda antes de pasar de páxina.
+const CHROMIUM_RESPOSTA_TIMEOUT_MS = 10_000;
+
+/**
+ * Comproba se Chromium responde a unha orde mínima en CHROMIUM_RESPOSTA_TIMEOUT_MS.
+ * Nas Raspberry Pi observouse que, tras a primeira páxina, Chromium pode quedar
+ * bloqueado; sen esta comprobación, cada orde agarda ata esgotar o protocolTimeout.
+ */
+async function chromiumResponde(page) {
+  let timeoutId;
+  const responde = await Promise.race([
+    page.evaluate(() => true).catch(() => false),
+    new Promise((resolve) => {
+      timeoutId = setTimeout(() => resolve(false), CHROMIUM_RESPOSTA_TIMEOUT_MS);
+    }),
+  ]);
+  clearTimeout(timeoutId);
+  return responde;
+}
+
 /**
  * Pasa á seguinte páxina de resultados premendo «Seguinte» (a#pnnext), coma unha persoa.
- * Se a ligazón non está (p. ex. coa xanela estreita), carga a mesma procura co
- * parámetro start correspondente. Devolve false se non se puido cambiar de páxina.
+ * hrefSeguinte é a ligazón lida xunto cos resultados; se non a hai, cárgase a mesma
+ * procura co parámetro start correspondente. Devolve false se non se puido cambiar de páxina.
  */
-async function vaiPaxinaSeguinte(page, paxina, timeoutMs) {
-  const seguinte = await page.$('a#pnnext').catch(() => null);
+async function vaiPaxinaSeguinte(page, paxina, timeoutMs, hrefSeguinte) {
+  if (!(await chromiumResponde(page))) {
+    console.warn(
+      `vaiPaxinaSeguinte: Chromium non responde en ${CHROMIUM_RESPOSTA_TIMEOUT_MS / 1000} s; non se pasa á páxina ${paxina}.`
+    );
+    return false;
+  }
 
   try {
-    if (seguinte) {
-      await seguinte.evaluate((ligazon) => ligazon.scrollIntoView({ block: 'center' }));
+    if (hrefSeguinte) {
+      await page.evaluate(() => document.querySelector('a#pnnext')?.scrollIntoView({ block: 'center' }));
       await humanPause(page, 400, 900);
       const navigationPromise = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: timeoutMs });
-      await seguinte.click({ delay: randomInt(40, 90) });
+      const premido = await page.evaluate(() => {
+        const ligazon = document.querySelector('a#pnnext');
+        if (!ligazon) {
+          return false;
+        }
+        ligazon.click();
+        return true;
+      });
+      if (!premido) {
+        navigationPromise.catch(() => {});
+        await page.goto(hrefSeguinte, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+        return true;
+      }
       await navigationPromise;
       return true;
     }
@@ -626,15 +669,13 @@ async function vaiPaxinaSeguinte(page, paxina, timeoutMs) {
       return false;
     }
     url.searchParams.set('start', String((paxina - 1) * 10));
-    console.log(`vaiPaxinaSeguinte: non se atopou «Seguinte»; cárgase ${url.pathname}?…start=${(paxina - 1) * 10}.`);
+    console.log(`vaiPaxinaSeguinte: a páxina non ten «Seguinte»; cárgase ${url.pathname}?…start=${(paxina - 1) * 10}.`);
     await humanPause(page, 400, 900);
     await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: timeoutMs });
     return true;
   } catch (error) {
     console.warn(`vaiPaxinaSeguinte: non se puido abrir a páxina ${paxina}.`, error);
     return false;
-  } finally {
-    await seguinte?.dispose().catch(() => {});
   }
 }
 
@@ -700,13 +741,14 @@ export async function executaProcuraGoogle(
   await assertNonBloqueadoPorGoogle(page, paxinaContent);
 
   const seenUrls = new Set();
-  const results = await procuraDatos(page, maxResults, timeoutMs, { onResult, seenUrls });
+  const paxinacion = {};
+  const results = await procuraDatos(page, maxResults, timeoutMs, { onResult, seenUrls, paxinacion });
 
   for (let paxina = 2; results.length < maxResults && paxina <= MAX_PAXINAS_GOOGLE; paxina += 1) {
     console.log(
       `Obtivéronse ${results.length} de ${maxResults} resultados; pásase á páxina ${paxina} de Google.`
     );
-    if (!(await vaiPaxinaSeguinte(page, paxina, timeoutMs))) {
+    if (!(await vaiPaxinaSeguinte(page, paxina, timeoutMs, paxinacion.seguinte))) {
       break;
     }
 
@@ -723,6 +765,7 @@ export async function executaProcuraGoogle(
         onResult,
         seenUrls,
         posicionInicial: results.length,
+        paxinacion,
       });
       results.push(...novos);
       if (novos.length === 0) {
