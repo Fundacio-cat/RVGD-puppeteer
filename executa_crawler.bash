@@ -20,8 +20,16 @@ mkdir -p "$(dirname "${rexistro}")"
 
 now_epoch="$(date +%s)"
 timestamp="$(date -d "@${now_epoch}" '+%Y-%m-%d %H:%M:%S')"
-# Atraso aleatorio: máximo 5 h 55 min (21300 s)
-atraso_max_segundos=$((5 * 60 * 60 + 55 * 60))
+# Atraso aleatorio: por defecto, máximo 5 h 55 min (355 min), pensado para dúas
+# execucións ao día (9:00 e 15:00). Con máis execucións, cómpre reducilo para que non
+# se solapen: ATRASO_MAX_MINUTOS no cron (p. ex. 175 para catro execucións cada 3 h).
+atraso_max_minutos_defecto=355
+atraso_max_minutos="${ATRASO_MAX_MINUTOS:-${atraso_max_minutos_defecto}}"
+if ! [[ "${atraso_max_minutos}" =~ ^[0-9]+$ ]]; then
+  echo "[$timestamp] WARN: ATRASO_MAX_MINUTOS=\"${atraso_max_minutos}\" non é un número de minutos; úsanse ${atraso_max_minutos_defecto}." >> "${rexistro}"
+  atraso_max_minutos="${atraso_max_minutos_defecto}"
+fi
+atraso_max_segundos=$((10#${atraso_max_minutos} * 60))
 atraso_segundos=$((((RANDOM << 15) | RANDOM) % (atraso_max_segundos + 1)))
 atraso_minutos=$((atraso_segundos / 60))
 atraso_formatado="$(printf '%02d:%02d:%02d' $((atraso_segundos / 3600)) $(((atraso_segundos % 3600) / 60)) $((atraso_segundos % 60)))"
