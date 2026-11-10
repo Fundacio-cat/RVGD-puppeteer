@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { createStealthPage, launchBrowser, waitMs } from './browser.js';
 import { ensureDatabaseConnection, seguentCerca, seleccionaMides, guardaDb } from './database.js';
 import { seleccionaCercador } from './cercadors/@cercador.js';
@@ -90,67 +92,142 @@ async function loadConfig(configPath = DEFAULT_CONFIG_PATH) {
   }
 }
 
-async function closeBrowserSafely(browser, { waitForExitMs = 2_000, killSignal = 'SIGKILL' } = {}) {
+const execFileAsync = promisify(execFile);
+
+/**
+ * Devolve os PID de todos os procesos descendentes de pid (fillos, netos...).
+ */
+async function descendentesDe(pid) {
+  const descendentes = [];
+  const pendentes = [pid];
+  while (pendentes.length > 0) {
+    const actual = pendentes.pop();
+    let stdout = '';
+    try {
+      ({ stdout } = await execFileAsync('pgrep', ['-P', String(actual)], { timeout: 3_000 }));
+    } catch {
+      // pgrep sae con erro se o proceso non ten fillos.
+      continue;
+    }
+    for (const linea of stdout.split('\n')) {
+      const fillo = Number.parseInt(linea, 10);
+      if (Number.isInteger(fillo) && fillo > 0) {
+        descendentes.push(fillo);
+        pendentes.push(fillo);
+      }
+    }
+  }
+  return descendentes;
+}
+
+function procesoActivo(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pecha o navegador. Se Chromium non responde en closeTimeoutMs (nas Raspberry Pi
+ * observouse que browser.close() podía quedar bloqueado ata esgotar o protocolTimeout),
+ * mátao á forza xunto cos seus procesos fillos, para que non queden restos que a
+ * seguinte execución teña que limpar.
+ */
+async function closeBrowserSafely(
+  browser,
+  { closeTimeoutMs = 10_000, waitForExitMs = 2_000, killSignal = 'SIGKILL' } = {}
+) {
   if (!browser) {
     return;
   }
 
   const browserProcess = typeof browser.process === 'function' ? browser.process() : null;
+  // Os fillos hai que coñecelos antes de pechar: cando morre o proceso principal pasan
+  // a depender de init e xa non se poden relacionar con el.
+  const descendentes = browserProcess?.pid ? await descendentesDe(browserProcess.pid) : [];
 
-  try {
-    await browser.close();
-  } catch (error) {
-    console.error('Erro pechando o navegador:', error);
+  let timeoutId;
+  const pechado = await Promise.race([
+    browser
+      .close()
+      .then(() => true)
+      .catch((error) => {
+        console.error('Erro pechando o navegador:', error);
+        return false;
+      }),
+    new Promise((resolve) => {
+      timeoutId = setTimeout(() => resolve(false), closeTimeoutMs);
+    }),
+  ]);
+  clearTimeout(timeoutId);
+
+  if (!pechado) {
+    console.warn(`Chromium non se pechou en ${closeTimeoutMs / 1000} s; remátase á forza.`);
   }
 
-  if (!browserProcess) {
-    return;
-  }
-
-  const exited = await new Promise((resolve) => {
-    if (browserProcess.exitCode !== null) {
-      resolve(true);
-      return;
-    }
-
-    let finished = false;
-    let timeoutId;
-
-    const cleanup = () => {
-      if (finished) {
+  if (browserProcess) {
+    const exited = await new Promise((resolve) => {
+      if (browserProcess.exitCode !== null || browserProcess.signalCode !== null) {
+        resolve(true);
         return;
       }
-      finished = true;
-      clearTimeout(timeoutId);
-      if (typeof browserProcess.off === 'function') {
-        browserProcess.off('exit', onExit);
-      } else {
-        browserProcess.removeListener('exit', onExit);
+
+      let finished = false;
+      let waitTimeoutId;
+
+      const cleanup = () => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        clearTimeout(waitTimeoutId);
+        if (typeof browserProcess.off === 'function') {
+          browserProcess.off('exit', onExit);
+        } else {
+          browserProcess.removeListener('exit', onExit);
+        }
+      };
+
+      const onExit = () => {
+        cleanup();
+        resolve(true);
+      };
+
+      waitTimeoutId = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, pechado ? waitForExitMs : 0);
+
+      browserProcess.once('exit', onExit);
+    });
+
+    if (!exited && browserProcess.exitCode === null && browserProcess.signalCode === null) {
+      try {
+        if (!browserProcess.kill(killSignal)) {
+          console.error(`O proceso de Chromium segue activo; non se puido enviar ${killSignal}.`);
+        }
+      } catch (error) {
+        console.error(`Non se puido matar o proceso de Chromium con ${killSignal}:`, error);
       }
-    };
-
-    const onExit = () => {
-      cleanup();
-      resolve(true);
-    };
-
-    timeoutId = setTimeout(() => {
-      cleanup();
-      resolve(false);
-    }, waitForExitMs);
-
-    browserProcess.once('exit', onExit);
-  });
-
-  if (!exited && browserProcess.exitCode === null && !browserProcess.killed) {
-    try {
-      const killed = browserProcess.kill(killSignal);
-      if (!killed) {
-        console.error(`O proceso de Chromium segue activo; non se puido enviar ${killSignal}.`);
-      }
-    } catch (error) {
-      console.error(`Non se puido matar o proceso de Chromium con ${killSignal}:`, error);
     }
+  }
+
+  let rematados = 0;
+  for (const pid of descendentes) {
+    if (!procesoActivo(pid)) {
+      continue;
+    }
+    try {
+      process.kill(pid, killSignal);
+      rematados += 1;
+    } catch (error) {
+      console.error(`Non se puido matar o proceso fillo de Chromium ${pid}:`, error);
+    }
+  }
+  if (rematados > 0) {
+    console.warn(`Matáronse ${rematados} procesos fillos de Chromium que quedaran activos.`);
   }
 }
 
@@ -245,7 +322,9 @@ async function runCrawler(query, { databaseUrl = null, searchOptions = {}, brows
 
       // Comproba que o número de resultados sexa o agardado
       if (typeof searchOptions.maxResults === 'number' && results.length < searchOptions.maxResults) {
-        console.warn(`Obtivéronse ${results.length} resultados para "${searchString}".`);
+        console.warn(`Gardáronse ${results.length} de ${searchOptions.maxResults} resultados para "${searchString}".`);
+      } else {
+        console.log(`Gardáronse ${results.length} resultados para "${searchString}".`);
       }
 
       await waitMs(page, 5_000);

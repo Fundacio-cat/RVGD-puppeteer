@@ -203,7 +203,7 @@ async function resolveResultUrl(rawLink, { cookieHeader = '' } = {}) {
   }
 
   for (let intento = 0; ; intento += 1) {
-    const { status, location, error } = await pideRedireccionGoogle(absoluteUrl, cookieHeader);
+    const { location } = await pideRedireccionGoogle(absoluteUrl, cookieHeader);
 
     if (location && location.startsWith('http')) {
       // Unha redirección á páxina de captcha de Google non é un resultado.
@@ -211,29 +211,14 @@ async function resolveResultUrl(rawLink, { cookieHeader = '' } = {}) {
         console.warn(`resolveResultUrl: Google redirixiu "${rawLink}" á páxina de bloqueo (${location}).`);
         return null;
       }
-      if (intento > 0) {
-        console.log(`resolveResultUrl: URL resolta no intento ${intento + 1}.`);
-      }
       return location;
     }
 
-    let motivo;
-    if (error) {
-      motivo = error.name === 'AbortError' ? 'tempo esgotado' : error.message;
-    } else {
-      motivo = `HTTP ${status}, ${location ? `Location=${location}` : 'sen Location'}`;
-    }
-
     if (intento >= GOOGLE_REDIRECT_RETRY_DELAYS_MS.length) {
-      console.warn(
-        `resolveResultUrl: non se puido resolver "${rawLink}" tras ${intento + 1} intentos (${motivo}).`
-      );
       return null;
     }
 
-    const espera = GOOGLE_REDIRECT_RETRY_DELAYS_MS[intento];
-    console.warn(`resolveResultUrl: intento ${intento + 1} sen redirección (${motivo}); reinténtase en ${espera} ms.`);
-    await waitMs(null, espera);
+    await waitMs(null, GOOGLE_REDIRECT_RETRY_DELAYS_MS[intento]);
   }
 }
 
@@ -249,7 +234,6 @@ export async function procuraDatos(
   timeoutMs,
   { onResult, seenUrls = new Set(), posicionInicial = 0 } = {}
 ) {
-  console.log('procuraDatos: agardando resultados orgánicos...');
   // Con módulos coma "Escolma xerada por IA" ou "Máis preguntas", Google pinta antes
   // o contedor baleiro que o seu contido; agardar só pola existencia de div#search
   // pode facer que a extracción se adiante e atope 0 candidatos. Ademais, priorizamos
@@ -283,10 +267,8 @@ export async function procuraDatos(
     );
   }
   
-  console.log('procuraDatos: realizando scroll humano...');
   await performHumanScroll(page);
 
-  console.log('procuraDatos: recuperando ligazóns de resultados...');
   const results = [];
   const { contedor, totalLigazons, entradas } = await extraeResultadosPagina(page);
   if (contedor) {
@@ -331,9 +313,6 @@ export async function procuraDatos(
       // consérvanse a posición, o título e a descrición.
       unresolvedCount++;
       resolvedUrl = entry.link;
-      console.warn(
-        `Candidato #${index + 1}: non se puido resolver a URL real; gárdase a ligazón de Google tal cal. href=${entry.link}; título=${entry.titol}`
-      );
     }
 
     if (seenUrls.has(resolvedUrl)) {
