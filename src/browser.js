@@ -407,16 +407,17 @@ function buildDefaultLaunchArgs(userArgs = []) {
   if (process.platform === 'linux') {
     defaultArgs.push(...LINUX_EXTRA_LAUNCH_ARGS);
 
-    // --single-process fai que navegador, páxina e canle CDP compartan proceso, e nas
-    // Raspberry Pi coincidiu con bloqueos de ata 2 minutos. CHROMIUM_SINGLE_PROCESS=0
-    // permite desactivalo para comprobar se os bloqueos desaparecen.
-    const singleProcess = !['0', 'false', 'no'].includes(
+    // Por defecto NON se usa --single-process: fai que navegador, páxina e canle CDP
+    // compartan proceso e, nas Raspberry Pi, provocaba bloqueos de ata 2 minutos
+    // (DOM.describeNode, browser.close, paso á páxina 2). Comprobado en 0bg4n o
+    // 2026-11-10: sen el, a procura completa as dúas páxinas e Chromium péchase só.
+    // CHROMIUM_SINGLE_PROCESS=1 volve activalo se algún sensor o necesita.
+    const singleProcess = ['1', 'true', 'si', 'yes'].includes(
       (process.env.CHROMIUM_SINGLE_PROCESS ?? '').trim().toLowerCase()
     );
     if (process.arch.startsWith('arm') && singleProcess) {
+      console.log('Chromium iniciarase con --single-process e --no-zygote (CHROMIUM_SINGLE_PROCESS=1).');
       defaultArgs.push(...LINUX_ARM_EXTRA_LAUNCH_ARGS);
-    } else if (process.arch.startsWith('arm')) {
-      console.log('Chromium iniciarase sen --single-process nin --no-zygote (CHROMIUM_SINGLE_PROCESS=0).');
     }
   }
 
