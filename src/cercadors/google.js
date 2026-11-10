@@ -239,8 +239,16 @@ async function resolveResultUrl(rawLink, { cookieHeader = '' } = {}) {
 
 /**
  * Recorre as ligazóns visibles e constrúe resultados con título, URL e descrición.
+ * Para continuar desde unha páxina anterior: `seenUrls` comparte as URL xa gardadas
+ * (para non repetilas) e `posicionInicial` é o número de resultados xa gardados, para
+ * que as posicións sigan a numeración.
  */
-export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {}) {
+export async function procuraDatos(
+  page,
+  maxResults,
+  timeoutMs,
+  { onResult, seenUrls = new Set(), posicionInicial = 0 } = {}
+) {
   console.log('procuraDatos: agardando resultados orgánicos...');
   // Con módulos coma "Escolma xerada por IA" ou "Máis preguntas", Google pinta antes
   // o contedor baleiro que o seu contido; agardar só pola existencia de div#search
@@ -280,7 +288,6 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
 
   console.log('procuraDatos: recuperando ligazóns de resultados...');
   const results = [];
-  const seenUrls = new Set();
   const { contedor, totalLigazons, entradas } = await extraeResultadosPagina(page);
   if (contedor) {
     console.log(
@@ -299,6 +306,7 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
   let discardedWithoutData = 0;
   let duplicateCount = 0;
   let skippedByLimit = 0;
+  let unresolvedCount = 0;
 
   for (const [index, entry] of entradas.entries()) {
     if (results.length >= maxResults) {
@@ -317,13 +325,15 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
       continue;
     }
 
-    const resolvedUrl = await resolveResultUrl(entry.link, { cookieHeader });
+    let resolvedUrl = await resolveResultUrl(entry.link, { cookieHeader });
     if (!resolvedUrl) {
-      discardedWithoutData++;
+      // Mellor gardar o resultado coa ligazón de Google (/goto?url=...) que perdelo:
+      // consérvanse a posición, o título e a descrición.
+      unresolvedCount++;
+      resolvedUrl = entry.link;
       console.warn(
-        `Descartado candidato #${index + 1}: non se puido resolver a URL real; href=${entry.link}; título=${entry.titol}`
+        `Candidato #${index + 1}: non se puido resolver a URL real; gárdase a ligazón de Google tal cal. href=${entry.link}; título=${entry.titol}`
       );
-      continue;
     }
 
     if (seenUrls.has(resolvedUrl)) {
@@ -344,7 +354,7 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
 
     if (typeof onResult === 'function') {
       try {
-        await onResult(normalizedResult, results.length - 1);
+        await onResult(normalizedResult, posicionInicial + results.length - 1);
       } catch (error) {
         console.error('procuraDatos: erro notificado por onResult.', error);
         throw error;
@@ -359,7 +369,7 @@ export async function procuraDatos(page, maxResults, timeoutMs, { onResult } = {
   }
 
   console.log(
-    `Resultados acumulados: ${results.length} (candidatos: ${totalCandidates}, duplicados: ${duplicateCount}, descartados: ${discardedWithoutData}, límite: ${skippedByLimit}).`
+    `Resultados acumulados: ${results.length} (candidatos: ${totalCandidates}, duplicados: ${duplicateCount}, descartados: ${discardedWithoutData}, sen resolver: ${unresolvedCount}, límite: ${skippedByLimit}).`
   );
 
   return results;
@@ -610,8 +620,50 @@ async function assertNonBloqueadoPorGoogle(page, content = null) {
   }
 }
 
+// Número máximo de páxinas de resultados que se percorren para chegar a maxResults.
+const MAX_PAXINAS_GOOGLE = 3;
+
+/**
+ * Pasa á seguinte páxina de resultados premendo «Seguinte» (a#pnnext), coma unha persoa.
+ * Se a ligazón non está (p. ex. coa xanela estreita), carga a mesma procura co
+ * parámetro start correspondente. Devolve false se non se puido cambiar de páxina.
+ */
+async function vaiPaxinaSeguinte(page, paxina, timeoutMs) {
+  const seguinte = await page.$('a#pnnext').catch(() => null);
+
+  try {
+    if (seguinte) {
+      await seguinte.evaluate((ligazon) => ligazon.scrollIntoView({ block: 'center' }));
+      await humanPause(page, 400, 900);
+      const navigationPromise = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: timeoutMs });
+      await seguinte.click({ delay: randomInt(40, 90) });
+      await navigationPromise;
+      return true;
+    }
+
+    const url = new URL(page.url());
+    if (url.pathname !== '/search' || !url.searchParams.get('q')) {
+      console.warn('vaiPaxinaSeguinte: non hai ligazón á páxina seguinte nin unha URL de procura válida.');
+      return false;
+    }
+    url.searchParams.set('start', String((paxina - 1) * 10));
+    console.log(`vaiPaxinaSeguinte: non se atopou «Seguinte»; cárgase ${url.pathname}?…start=${(paxina - 1) * 10}.`);
+    await humanPause(page, 400, 900);
+    await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    return true;
+  } catch (error) {
+    console.warn(`vaiPaxinaSeguinte: non se puido abrir a páxina ${paxina}.`, error);
+    return false;
+  } finally {
+    await seguinte?.dispose().catch(() => {});
+  }
+}
+
 /**
  * Realiza a secuencia completa de procura en Google e devolve os resultados atopados.
+ * Se na primeira páxina non se chega a maxResults, continúa nas seguintes (ata
+ * MAX_PAXINAS_GOOGLE). Calquera problema nas páxinas seguintes só detén a paxinación:
+ * os resultados da primeira páxina xa están gardados.
  */
 export async function executaProcuraGoogle(
   page,
@@ -668,7 +720,43 @@ export async function executaProcuraGoogle(
   const { content: paxinaContent } = await capturaContextoResultados(page, query);
   await assertNonBloqueadoPorGoogle(page, paxinaContent);
 
-  const results = await procuraDatos(page, maxResults, timeoutMs, { onResult });
+  const seenUrls = new Set();
+  const results = await procuraDatos(page, maxResults, timeoutMs, { onResult, seenUrls });
+
+  for (let paxina = 2; results.length < maxResults && paxina <= MAX_PAXINAS_GOOGLE; paxina += 1) {
+    console.log(
+      `Obtivéronse ${results.length} de ${maxResults} resultados; pásase á páxina ${paxina} de Google.`
+    );
+    if (!(await vaiPaxinaSeguinte(page, paxina, timeoutMs))) {
+      break;
+    }
+
+    const { content: contidoPaxina } = await capturaContextoResultados(page, `${query} p${paxina}`);
+    if (detectaBlocGoogle({ url: page.url(), content: contidoPaxina })) {
+      console.warn(
+        `Google detectou o sensor na páxina ${paxina} (${page.url()}); consérvanse os ${results.length} resultados xa gardados.`
+      );
+      break;
+    }
+
+    try {
+      const novos = await procuraDatos(page, maxResults - results.length, timeoutMs, {
+        onResult,
+        seenUrls,
+        posicionInicial: results.length,
+      });
+      results.push(...novos);
+      if (novos.length === 0) {
+        break;
+      }
+    } catch (error) {
+      console.warn(
+        `Erro na páxina ${paxina} de Google; consérvanse os ${results.length} resultados xa gardados.`,
+        error
+      );
+      break;
+    }
+  }
 
   if (results.length === 0) {
     console.warn(
